@@ -1,0 +1,64 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.3.1-cuda11.8-cudnn8-devel
+Stage: spython-base
+
+%files
+third_party/Humans4D /Humans4D
+
+%post
+PYTORCH="2.3.1"
+CUDA="11.8"
+CUDNN="8"
+
+TORCH_NVCC_FLAGS="-Xfatbin -compress-all"
+CMAKE_PREFIX_PATH="$(dirname $(which conda))/../"
+
+export LIBGLVND_VERSION="v1.2.0"
+# runtime from https://gitlab.com/nvidia/container-images/opengl/-/blob/ubuntu18.04/glvnd/runtime/Dockerfile
+mkdir -p /usr/share/glvnd/egl_vendor.d
+echo '{"file_format_version": "1.0.0", "ICD": {"library_path": "libEGL_nvidia.so.0"}}' >> /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
+apt-get update && apt-get install -y --no-install-recommends \
+        libglvnd0 \
+        libgl1 \
+        libglx0 \
+        libegl1\
+        libgles2 && \
+    rm -rf /var/lib/apt/lists/*
+
+# devel from https://gitlab.com/nvidia/container-images/opengl/-/blob/ubuntu18.04/glvnd/devel/Dockerfile
+apt-get update && apt-get install -y --no-install-recommends \
+        pkg-config \
+        libglvnd-dev \
+        libgl1-mesa-dev \
+        libegl1-mesa-dev \
+        libgles2-mesa-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+export NVIDIA_DRIVER_CAPABILITIES="compute,graphics,utility,video"
+apt-get update && apt-get install -y freeglut3-dev
+
+apt-get update && apt-get install -y git ninja-build libglib2.0-0 libsm6 libxrender-dev libxext6 wget \
+&& apt-get clean \
+&& rm -rf /var/lib/apt/lists/*
+
+conda clean --all
+
+cd /Humans4D
+FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="8.6 8.0 7.5+PTX" pip install --no-cache-dir -e .[all]
+FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="8.6 8.0 7.5+PTX" pip install git+https://github.com/brjathu/PHALP.git
+FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="8.6 8.0 7.5+PTX" pip install git+https://github.com/facebookresearch/pytorch3d.git
+FORCE_CUDA=1 TORCH_CUDA_ARCH_LIST="8.6 8.0 7.5+PTX" pip install PyOpenGL-accelerate
+
+%environment
+export TORCH_CUDA_ARCH_LIST="8.6 8.0 7.5+PTX"
+export TORCH_NVCC_FLAGS="-Xfatbin -compress-all"
+export CMAKE_PREFIX_PATH="$(dirname $(which conda))/../"
+export NVIDIA_DRIVER_CAPABILITIES="compute,graphics,utility,video"
+export LIBGLVND_VERSION="v1.2.0"
+%runscript
+cd /Humans4D
+exec /bin/bash "$@"
+%startscript
+cd /Humans4D
+exec /bin/bash "$@"
