@@ -1,0 +1,16 @@
+ArrayTaskID     SeqNum
+1               0099  # lane shift cause parked car
+2               0101  # bridge straight many cars
+3               0103  # car cuts in
+4               0106  # straight with many cars
+5               0108  # right turn after car zooms by
+6               0110  # straight many frontal collisions
+7               0278  # motorcycle
+8               0331  # left unprotected turn with oncoming traffic
+9               0346  # motorcycle frontal
+10              0783  # straight with bus
+11              0796  # fast blue car
+12              0921  # left turn
+13              0923  # frontal
+14              0966  # tight squeeze should stop
+15              0061  # mini set whatever

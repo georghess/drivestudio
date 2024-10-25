@@ -1,0 +1,9 @@
+ArrayTaskID     SeqNum
+1               0101  # bridge straight many cars
+2               0346  # motorcycle frontal
+3               0783  # straight with bus
+4               0796  # fast blue car
+5               0921  # left turn
+6               0923  # frontal
+7               0966  # tight squeeze should stop
+8               0061  # mini set whatever
