@@ -67,6 +67,7 @@ def setup(args):
             project=os.environ.get("WANDB_PROJECT", args.project),
             dir=os.environ.get("WANDB_DIR", str(log_dir)),
             name=os.environ.get("WANDB_NAME", args.run_name),
+            group=os.environ.get("WANDB_RUN_GROUP", None),
             reinit=True,
         )
             is not wandb.run
