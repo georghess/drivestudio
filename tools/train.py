@@ -61,20 +61,21 @@ def setup(args):
     # setup wandb
     if args.enable_wandb:
         # sometimes wandb fails to init in cloud machines, so we give it several (many) tries
+        os.makedirs(os.path.join(log_dir, "wandb"), exist_ok=True)
         while (
             wandb.init(
-                project=args.project,
-                entity=args.entity,
-                sync_tensorboard=True,
-                settings=wandb.Settings(start_method="fork"),
-            )
+            project=os.environ.get("WANDB_PROJECT", args.project),
+            dir=os.environ.get("WANDB_DIR", str(log_dir)),
+            name=os.environ.get("WANDB_NAME", args.run_name),
+            reinit=True,
+        )
             is not wandb.run
         ):
             continue
         wandb.run.name = args.run_name
         wandb.run.save()
-        wandb.config.update(OmegaConf.to_container(cfg, resolve=True))
-        wandb.config.update(args)
+        wandb.config.update(OmegaConf.to_container(cfg, resolve=True),  allow_val_change=True)
+        wandb.config.update(args,  allow_val_change=True)
 
     # setup random seeds
     set_seeds(cfg.seed)
@@ -361,7 +362,7 @@ if __name__ == "__main__":
     
     # wandb logging part
     parser.add_argument("--enable_wandb", action="store_true", help="enable wandb logging")
-    parser.add_argument("--entity", default="ziyc", type=str, help="wandb entity name")
+    parser.add_argument("--entity", default="agp", type=str, help="wandb entity name")
     parser.add_argument("--project", default="drivestudio", type=str, help="wandb project name, also used to enhance log_dir")
     parser.add_argument("--run_name", default="omnire", type=str, help="wandb run name, also used to enhance log_dir")
     
