@@ -160,6 +160,12 @@ if __name__ == "__main__":
             "objects"
         ],
     )
+    parser.add_argument(
+        "--train_list_path",
+        type=str,
+        default=None,
+        help="Path to the train list file for argoverse dataset",
+    )
     args = parser.parse_args()
     if args.dataset != 'nuscenes' and args.interpolate_N > 0:
         parser.error("interpolate_N > 0 is only allowed when dataset is 'nuscenes'")
@@ -206,6 +212,7 @@ if __name__ == "__main__":
             process_keys=args.process_keys,
             process_id_list=scene_ids_list,
             workers=args.workers,
+            train_list_path=args.train_list_path,
         )
     elif args.dataset == "nuscenes":
         from datasets.nuscenes.nuscenes_preprocess import NuScenesProcessor

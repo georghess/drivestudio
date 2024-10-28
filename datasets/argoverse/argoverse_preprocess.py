@@ -67,7 +67,10 @@ class ArgoVerseProcessor(object):
         ],
         process_id_list=None,
         workers=64,
+        train_list_path=None,
     ):
+        train_list_path = train_list_path if train_list_path is not None else "data/argoverse_train_list.txt"
+        print(f"INFO: Load train list from {train_list_path}")
         self.process_id_list = process_id_list
         self.process_keys = process_keys
         print("will process keys: ", self.process_keys)
@@ -101,8 +104,10 @@ class ArgoVerseProcessor(object):
             with_cache=True,
             cam_names=tuple(cam_enums)
         )
+        print(f"Found {self.av2loader.num_logs} logs")
         # a list of tfrecord pathnames
-        self.training_files = open("data/argoverse_train_list.txt").read().splitlines()
+        self.training_files = open(train_list_path).read().splitlines()
+        print(f"INFO: {len(self.training_files)} files to process")
         self.log_pathnames = [
             f"{self.load_dir}/{f}" for f in self.training_files
         ]
