@@ -95,6 +95,43 @@ DATASETS_CONFIG = {
             "egocar_visible": True
         },  
     },
+    "argoverse2": {
+        0: {
+            "camera_name": "ring_front_center",
+            "original_size": (2048, 1550),
+            "egocar_visible": True
+        },
+        1: {
+            "camera_name": "ring_front_left",
+            "original_size": (1550, 2048),
+            "egocar_visible": False
+        },
+        2: {
+            "camera_name": "ring_front_right",
+            "original_size": (1550, 2048),
+            "egocar_visible": False
+        },
+        3: {
+            "camera_name": "ring_side_left",
+            "original_size": (1550, 2048),
+            "egocar_visible": False
+        },
+        4: {
+            "camera_name": "ring_side_right",
+            "original_size": (1550, 2048),
+            "egocar_visible": False
+        },
+        5: {
+            "camera_name": "ring_rear_left",
+            "original_size": (1550, 2048),
+            "egocar_visible": True
+        },
+        6: {
+            "camera_name": "ring_rear_right",
+            "original_size": (1550, 2048),
+            "egocar_visible": True
+        },  
+    },
     "nuscenes": {
         0: {
             "camera_name": "CAM_FRONT",
