@@ -172,7 +172,13 @@ class NuScenesProcessor(object):
 
     def convert_one(self, scene_idx):
         """Convert action for single file."""
-        scene = self.nusc.scene[scene_idx]
+        print(f"Processing scene {str(scene_idx).zfill(3)}")
+        scenes = self.nusc.field2token("scene", "name", f"scene-{str(scene_idx).zfill(4)}")
+        if len(scenes) == 0:
+            print(f"Scene {str(scene_idx).zfill(3)} not found.")
+            return
+        scene = self.nusc.get("scene", scenes[0])
+        print(f"Fetched scene {str(scene_idx).zfill(3)}")
         scene_data = self.nusc.get('scene', scene['token'])
         if "images" in self.process_keys:
             self.save_image(scene_data, scene_idx)
@@ -207,7 +213,13 @@ class NuScenesProcessor(object):
 
     def convert_one_interpolated(self, scene_idx):
         """Convert action for single file."""
-        scene = self.nusc.scene[scene_idx]
+        print(f"Processing scene {str(scene_idx).zfill(3)}")
+        scenes = self.nusc.field2token("scene", "name", f"scene-{str(scene_idx).zfill(4)}")
+        if len(scenes) == 0:
+            print(f"Scene {str(scene_idx).zfill(3)} not found.")
+            return
+        scene = self.nusc.get("scene", scenes[0])
+        print(f"Fetched scene {str(scene_idx).zfill(3)}")
         scene_data = self.nusc.get('scene', scene['token'])
         keyframe_timestamps = self.get_keyframe_timestamps(scene_data)
         interpolated_timestamps = self.get_interpolated_timestamps(keyframe_timestamps, self.interpolate_N)
