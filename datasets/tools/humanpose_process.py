@@ -99,7 +99,7 @@ if __name__ == "__main__":
         from datasets.waymo.waymo_human_utils import project_human_boxes, CAMERA_LIST
     elif args.dataset == "pandaset":
         from datasets.pandaset.pandaset_human_utils import project_human_boxes, CAMERA_LIST
-    elif args.dataset == "argoverse":
+    elif args.dataset == "argoverse" or args.dataset == "argoverse2":
         from datasets.argoverse.argoverse_human_utils import project_human_boxes, CAMERA_LIST
     elif args.dataset == "nuscenes":
         from datasets.nuscenes.nuscenes_human_utils import project_human_boxes, CAMERA_LIST

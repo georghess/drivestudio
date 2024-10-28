@@ -662,7 +662,7 @@ class ScenePixelSource(abc.ABC):
     """
     # define a transformation matrix to convert the opencv camera coordinate system to the dataset camera coordinate system
     data_cfg: OmegaConf = None
-    # the dataset name, choose from ["waymo", "kitti", "nuscenes", "pandaset", "argoverse"]
+    # the dataset name, choose from ["waymo", "kitti", "nuscenes", "pandaset", "argoverse", "argoverse2"]
     dataset_name: str = None
     # the dict of camera data
     camera_data: Dict[int, CameraData] = {}
@@ -1080,7 +1080,7 @@ class ScenePixelSource(abc.ABC):
                 - cam_infos: Camera information (extrinsics, intrinsics, image dimensions)
                 - image_infos: Image-related information (indices, normalized time, viewdirs, etc.)
         """
-        if dataset_type == "argoverse":
+        if dataset_type == "argoverse" or dataset_type == "argoverse2":
             cam_id = 1  # Use cam_id 1 for Argoverse dataset
         else:
             cam_id = 0  # Use cam_id 0 for other datasets

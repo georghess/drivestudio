@@ -202,7 +202,7 @@ if __name__ == "__main__":
             process_id_list=scene_ids_list,
             workers=args.workers,
         )
-    elif args.dataset == "argoverse":
+    elif args.dataset == "argoverse" or args.dataset == "argoverse2":
         from datasets.argoverse.argoverse_preprocess import ArgoVerseProcessor
         
         scene_ids_list = [int(scene_id) for scene_id in scene_ids_list]

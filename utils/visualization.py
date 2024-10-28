@@ -26,7 +26,7 @@ def get_layout(dataset_type: str):
         layout = layout_waymo
     elif dataset_type == "pandaset":
         layout = layout_pandaset
-    elif dataset_type == "argoverse":
+    elif dataset_type == "argoverse" or dataset_type == "argoverse2":
         layout = layout_argoverse
     elif dataset_type == "nuscenes":
         layout = layout_nuscenes
