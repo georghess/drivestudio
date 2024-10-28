@@ -279,6 +279,14 @@ class CameraData(object):
             self.egocar_mask = torch.from_numpy(np.array(egocar_mask) > 0).float()
         else:
             self.egocar_mask = None
+
+        bottom_crop = os.path.join("data", "ego_masks", self.dataset_name, "bottom_crops.txt")
+        if os.path.exists(bottom_crop):
+            with open(bottom_crop, "r") as f:
+                bottom_crops = f.readlines()
+            self.bottom_crop = [int(crop) for crop in bottom_crops][self.cam_id]
+        else:
+            self.bottom_crop = 0
         
     def load_dynamic_masks(self):
         dynamic_masks = []
@@ -486,6 +494,7 @@ class CameraData(object):
         dynamic_mask, human_mask, vehicle_mask = None, None, None
         pixel_coords, normalized_time = None, None
         egocar_mask = None
+        bottom_crop = 0
         
         if self.images is not None:
             rgb = self.images[frame_idx]
@@ -529,6 +538,10 @@ class CameraData(object):
                     .squeeze(0)
                     .squeeze(0)
                 )
+        if self.bottom_crop is not None:
+            bottom_crop = self.bottom_crop
+            if self.downscale_factor != 1.0:
+                bottom_crop = int(self.bottom_crop * self.downscale_factor)
         if self.sky_masks is not None:
             sky_mask = self.sky_masks[frame_idx]
             if self.downscale_factor != 1.0:
@@ -643,6 +656,7 @@ class CameraData(object):
             "vehicle_masks": vehicle_mask,
             "egocar_masks": egocar_mask,
             "lidar_depth_map": lidar_depth_map,
+            "bottom_crop": bottom_crop,
         }
         image_infos = {k: v for k, v in _image_infos.items() if v is not None}
         

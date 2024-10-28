@@ -48,7 +48,8 @@ def render_images(
     dataset: SplitWrapper,
     compute_metrics: bool = False,
     compute_error_map: bool = False,
-    vis_indices: Optional[List[int]] = None
+    vis_indices: Optional[List[int]] = None,
+    use_bottom_crop: bool = False,
 ):
     """
     Render pixel-related outputs from a model.
@@ -64,7 +65,8 @@ def render_images(
         trainer=trainer,
         compute_metrics=compute_metrics,
         compute_error_map=compute_error_map,
-        vis_indices=vis_indices
+        vis_indices=vis_indices,
+        use_bottom_crop=use_bottom_crop,
     )
     if compute_metrics:
         num_samples = len(dataset) if vis_indices is None else len(vis_indices)
@@ -90,6 +92,7 @@ def render(
     compute_metrics: bool = False,
     compute_error_map: bool = False,
     vis_indices: Optional[List[int]] = None,
+    use_bottom_crop: bool = False,
 ):
     """
     Renders a dataset utilizing a specified render function.
@@ -229,16 +232,24 @@ def render(
                 lidar_on_images.append(lidar_on_image)
 
             if compute_metrics:
-                psnr = compute_psnr(rgb, image_infos["pixels"])
+                if use_bottom_crop:
+                    height = rgb.shape[0]
+                    cropped_height = height - image_infos["bottom_crop"]
+                    metric_gt_rgb = rgb[:cropped_height]
+                    metric_pred_rgb = image_infos["pixels"][:cropped_height]
+                else:
+                    metric_gt_rgb = rgb
+                    metric_pred_rgb = image_infos["pixels"]
+                psnr = compute_psnr(metric_gt_rgb, metric_pred_rgb)
                 ssim_score = ssim(
-                    get_numpy(rgb),
-                    get_numpy(image_infos["pixels"]),
+                    get_numpy(metric_gt_rgb),
+                    get_numpy(metric_pred_rgb),
                     data_range=1.0,
                     channel_axis=-1,
                 )
                 lpips = trainer.lpips(
-                    rgb[None, ...].permute(0, 3, 1, 2),
-                    image_infos["pixels"][None, ...].permute(0, 3, 1, 2)
+                    metric_gt_rgb[None, ...].permute(0, 3, 1, 2),
+                    metric_pred_rgb[None, ...].permute(0, 3, 1, 2)
                 )
                 logger.info(f"Frame {i}: PSNR {psnr:.4f}, SSIM {ssim_score:.4f}")
                 psnrs.append(psnr)

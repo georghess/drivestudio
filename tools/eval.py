@@ -29,7 +29,8 @@ def do_evaluation(
     args: argparse.Namespace = None,
     render_keys: Optional[List[str]] = None,
     post_fix: str = "",
-    log_metrics: bool = True
+    log_metrics: bool = True,
+    use_bottom_crop: bool = True,
 ):
     trainer.set_eval()
 
@@ -41,6 +42,7 @@ def do_evaluation(
             dataset=dataset.test_image_set,
             compute_metrics=True,
             compute_error_map=cfg.render.vis_error,
+            use_bottom_crop=use_bottom_crop
         )
         
         if log_metrics:
@@ -98,6 +100,7 @@ def do_evaluation(
             dataset=dataset.full_image_set,
             compute_metrics=True,
             compute_error_map=cfg.render.vis_error,
+            use_bottom_crop=use_bottom_crop
         )
         
         if log_metrics:
@@ -239,7 +242,9 @@ def main(args):
         dataset=dataset,
         render_keys=render_keys,
         args=args,
-        post_fix="_eval"
+        post_fix="_eval",
+        use_bottom_crop=args.use_bottom_crop,
+        log_metrics=True
     )
     
     if args.enable_viewer:
@@ -256,6 +261,9 @@ if __name__ == "__main__":
     # viewer
     parser.add_argument("--enable_viewer", action="store_true", help="enable viewer")
     parser.add_argument("--viewer_port", type=int, default=8080, help="viewer port")
+
+    # bottom crop
+    parser.add_argument("--use_bottom_crop", action="store_true", help="use bottom crop for evaluation")
         
     # misc
     parser.add_argument("opts", help="Modify config options using the command-line", default=None, nargs=argparse.REMAINDER)
