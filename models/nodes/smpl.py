@@ -22,13 +22,17 @@ class SMPLNodes(RigidNodes):
         **kwargs
     ):
         self.smpl_points_num = 6890
+        self.nn_ind = None
+        self.instances_quats = None
+        self.instances_trans = None
+        self.smpl_qauts = None
+        self.template = None
         super().__init__(**kwargs)
         
         self.use_voxel_deformer=self.ctrl_cfg.use_voxel_deformer
         # overide here, because we use only one dimension for scale
         if self.ball_gaussians:
             self._scales = torch.zeros(1, 1, device=self.device)
-        self.nn_ind = None
         
     @property
     def num_instances(self):
@@ -170,10 +174,13 @@ class SMPLNodes(RigidNodes):
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = self.get_gaussian_param_groups()
-        param_groups[self.class_prefix+"ins_rotation"] = [self.instances_quats]
-        param_groups[self.class_prefix+"ins_translation"] = [self.instances_trans]
-        param_groups[self.class_prefix+"smpl_rotation"] = [self.smpl_qauts]
-        if self.use_voxel_deformer:
+        if self.instances_quats is not None:
+            param_groups[self.class_prefix+"ins_rotation"] = [self.instances_quats]
+        if self.instances_trans is not None:
+            param_groups[self.class_prefix+"ins_translation"] = [self.instances_trans]
+        if self.smpl_qauts is not None:
+            param_groups[self.class_prefix+"smpl_rotation"] = [self.smpl_qauts]
+        if self.use_voxel_deformer and self.template is not None:
             param_groups[self.class_prefix+"w_dc_vox"] = [self.template.voxel_deformer.voxel_w_correction]
         #     param_groups[self.class_prefix+"w_rest_vox"] = [self.template.voxel_deformer.additional_correction]
         return param_groups
