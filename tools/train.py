@@ -344,6 +344,7 @@ def main(args):
         dataset=dataset,
         render_keys=render_keys,
         args=args,
+        only_metrics=args.eval_only_metrics,
     )
     
     if args.enable_viewer:
@@ -370,6 +371,9 @@ if __name__ == "__main__":
     # viewer
     parser.add_argument("--enable_viewer", action="store_true", help="enable viewer")
     parser.add_argument("--viewer_port", type=int, default=8080, help="viewer port")
+
+    # eval
+    parser.add_argument("--eval_only_metrics", action="store_true", help="only evaluate metrics")
     
     # misc
     parser.add_argument("opts", help="Modify config options using the command-line", default=None, nargs=argparse.REMAINDER)

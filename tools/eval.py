@@ -31,6 +31,7 @@ def do_evaluation(
     post_fix: str = "",
     log_metrics: bool = True,
     use_bottom_crop: bool = True,
+    only_metrics: bool = False
 ):
     trainer.set_eval()
 
@@ -42,7 +43,8 @@ def do_evaluation(
             dataset=dataset.test_image_set,
             compute_metrics=True,
             compute_error_map=cfg.render.vis_error,
-            use_bottom_crop=use_bottom_crop
+            use_bottom_crop=use_bottom_crop,
+            only_metrics=only_metrics
         )
         
         if log_metrics:
@@ -100,7 +102,8 @@ def do_evaluation(
             dataset=dataset.full_image_set,
             compute_metrics=True,
             compute_error_map=cfg.render.vis_error,
-            use_bottom_crop=use_bottom_crop
+            use_bottom_crop=use_bottom_crop,
+            only_metrics=only_metrics
         )
         
         if log_metrics:

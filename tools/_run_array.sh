@@ -25,8 +25,8 @@ if [ -z ${LOAD_NAME+x} ]; then
     MAYBE_RESUME_CMD=""
 else
     echo "LOAD_NAME specified in environment, resuming from $LOAD_NAME"
-    checkpoints=( $(ls $output_dir/$LOAD_NAME-$seq/$method/*/nerfstudio_models/*.ckpt) )
-    MAYBE_RESUME_CMD="--load-checkpoint=${checkpoints[-1]}"
+    checkpoints=( $(ls -t $output_dir/drivestudio/$LOAD_NAME-$seq/*.pth) )
+    MAYBE_RESUME_CMD="--resume_from=${checkpoints[0]}"
 fi
     # --env LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/.singularity.d/libs:/usr/local/lib/python3.10/dist-packages/torch/lib:/usr/local/cuda-11.8/lib64:/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu \
     # compute-sanitizer --launch-timeout=0 --tool memcheck \
@@ -43,7 +43,9 @@ singularity exec --nv \
     --run_name $name-$seq \
     --enable_wandb True \
     --entity agp \
+    --eval_only_metrics \
     dataset="$dataset/$cams" \
     data.scene_idx=$seq \
     data.data_root="$dataset_root" \
+    $MAYBE_RESUME_CMD \
     $DATAPARSER_ARGS
