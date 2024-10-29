@@ -1,24 +1,25 @@
-# NuScenes dataset configuration
+# ArgoVerse2 dataset configuration
 # Processed cameras:
-#   idx    camera           original size
-#    0    CAM_FRONT         (900, 1600)
-#    1    CAM_FRONT_LEFT    (900, 1600)
-#    2    CAM_FRONT_RIGHT   (900, 1600)
-#    3    CAM_BACK_LEFT     (900, 1600)
-#    4    CAM_BACK_RIGHT    (900, 1600)
-#    5    CAM_BACK          (900, 1600)
+#   idx         camera       original size
+#    0    ring_front_center  (1550, 2048)
+#    1    ring_front_left    (2048, 1550)
+#    2    ring_front_right   (2048, 1550)
+#    3    ring_side_left     (2048, 1550)
+#    4    ring_side_right    (2048, 1550)
+#    5    ring_rear_left     (2048, 1550)
+#    6    ring_rear_right    (2048, 1550)
 
 data:
-  data_root: data/nuscenes/processed_10Hz/mini # data root for the dataset
-  dataset: nuscenes # dataset type
-  scene_idx: 0 # which scene to use, [0, 849] for nuscenes's train/val sets, inclusive
+  data_root: data/argoverse/processed/training # data root for the dataset
+  dataset: argoverse # dataset type
+  scene_idx: 0 # which scene to use
   start_timestep: 0 # which timestep to start from
   end_timestep: -1 # which timestep to end at, -1 means the last timestep
   preload_device: cuda # choose from ["cpu", "cuda"], cache the data on this device
   pixel_source: # image source and object annotations
-    type: datasets.nuscenes.nuscenes_sourceloader.NuScenesPixelSource
-    cameras: [0, 1, 2, 3, 4, 5] # which cameras to use
-    downscale_when_loading: [1, 1, 1, 1, 1, 1] # the size of the images to load
+    type: datasets.argoverse.argoverse_sourceloader.ArgoVersePixelSource
+    cameras: [0, 1, 2, 3, 4, 5, 6] # which cameras to use
+    downscale_when_loading: [1, 1, 1, 1, 1, 1, 1] # the size of the images to load
     downscale: 1 # downscale factor wrt to the downscale_when_loading
     undistort: False # whether to undistort the images
     test_image_stride: 2 # use every Nth timestep for the test set. if 0, use all images for training and none for testing
@@ -31,7 +32,7 @@ data:
       buffer_ratio: 0.5 # the percentage of images sampled according to the error buffer
       start_enhance_weight: 3 # give more chance to sample starting frames, which usually have more errors
   lidar_source: # everything related to "lidar" --- from lidar points
-    type: datasets.nuscenes.nuscenes_sourceloader.NuScenesLiDARSource
+    type: datasets.argoverse.argoverse_sourceloader.ArgoVerseLiDARSource
     load_lidar: True # whether to load lidar
     # ---- compute aabb from lidar ---- #
     # if load_lidar is True, we compute aabb from lidar, otherwise we compute aabb from cameras

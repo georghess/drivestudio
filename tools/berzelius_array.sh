@@ -2,7 +2,7 @@
 #
 #SBATCH --nodes 1
 #SBATCH --gpus 1
-#SBATCH --time 03:00:00
+#SBATCH --time 04:00:00
 #SBATCH --output /proj/agp/users/%u/logs/%A_%a.out
 #SBATCH -A Berzelius-2024-322
 #SBATCH --array=1-10
