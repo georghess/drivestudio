@@ -41,11 +41,11 @@ singularity exec --nv \
     --output_root $output_dir \
     --project drivestudio \
     --run_name $name-$seq \
-    --enable_wandb True \
+    --enable_wandb \
     --entity agp \
+    $MAYBE_RESUME_CMD \
     --eval_only_metrics \
     dataset="$dataset/$cams" \
     data.scene_idx=$seq \
     data.data_root="$dataset_root" \
-    $MAYBE_RESUME_CMD \
     $DATAPARSER_ARGS
