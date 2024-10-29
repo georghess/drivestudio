@@ -235,11 +235,9 @@ class AffineTransform(nn.Module):
         self.zero_init()
         
     def zero_init(self):
-        torch.nn.init.zeros_(self.embedding.weight)
-        for layer in self.decoder:
-            if isinstance(layer, nn.Linear):
-                torch.nn.init.zeros_(layer.weight)
-                torch.nn.init.zeros_(layer.bias)
+        torch.nn.init.normal_(self.embedding.weight, std=0.1)
+        torch.nn.init.zeros_(self.decoder[-1].weight)
+        torch.nn.init.zeros_(self.decoder[-1].bias)
     
     def forward(self, image_infos):
         if "img_idx" in image_infos and not self.in_test_set:
