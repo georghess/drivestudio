@@ -238,11 +238,11 @@ def render(
                 if use_bottom_crop:
                     height = rgb.shape[0]
                     cropped_height = height - image_infos["bottom_crop"]
-                    metric_gt_rgb = rgb[:cropped_height]
-                    metric_pred_rgb = image_infos["pixels"][:cropped_height]
+                    metric_pred_rgb = rgb[:cropped_height]
+                    metric_gt_rgb = image_infos["pixels"][:cropped_height]
                 else:
-                    metric_gt_rgb = rgb
-                    metric_pred_rgb = image_infos["pixels"]
+                    metric_pred_rgb = rgb
+                    metric_gt_rgb = image_infos["pixels"]
                 psnr = compute_psnr(metric_gt_rgb, metric_pred_rgb)
                 ssim_score = ssim(
                     get_numpy(metric_gt_rgb),
