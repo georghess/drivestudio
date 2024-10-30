@@ -253,9 +253,9 @@ class AffineTransform(nn.Module):
             if "unique_cam_idx" in image_infos and "num_cams" in image_infos:
                     unique_cam_idx = image_infos["unique_cam_idx"]
                     num_cams = image_infos["num_cams"]
-                    mean_embedding = self.appearance_embedding.weight[unique_cam_idx::num_cams].mean(dim=0)
+                    mean_embedding = self.embedding.weight[unique_cam_idx::num_cams].mean(dim=0)
             else:
-                mean_embedding = self.appearance_embedding.weight.mean(dim=0)
+                mean_embedding = self.embedding.weight.mean(dim=0)
             embedding = torch.ones(
                 (*image_infos["viewdirs"].shape[:-1], self.embedding_dim),
                 device=image_infos["viewdirs"].device,
