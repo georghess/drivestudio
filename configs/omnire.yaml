@@ -248,7 +248,7 @@ model:
       pixel_affine: False
     optim:
       all:
-        lr: 1.0e-3
+        lr: 1.0e-5
         weight_decay: 1.0e-6
   CamPose:
     type: models.modules.CameraOptModule
