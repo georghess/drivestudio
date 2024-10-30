@@ -156,11 +156,17 @@ class SkyModel(nn.Module):
             if "img_idx" in image_infos and not self.in_test_set:
                 appearance_embedding = self.appearance_embedding(image_infos["img_idx"]).reshape(-1, self.appearance_embedding_dim)
             else:
+                if "unique_cam_idx" in image_infos and "num_cams" in image_infos:
+                    unique_cam_idx = image_infos["unique_cam_idx"]
+                    num_cams = image_infos["num_cams"]
+                    mean_embedding = self.appearance_embedding.weight[unique_cam_idx::num_cams].mean(dim=0)
+                else:
+                    mean_embedding = self.appearance_embedding.weight.mean(dim=0)
                 # use mean appearance embedding
                 appearance_embedding = torch.ones(
                     (*dd.shape[:-1], self.appearance_embedding_dim),
                     device=dd.device,
-                ) * self.appearance_embedding.weight.mean(dim=0)
+                ) * mean_embedding
             dd = torch.cat([dd, appearance_embedding], dim=-1)
         rgb_sky = self.sky_head(dd).to(self.device)
         rgb_sky = F.sigmoid(rgb_sky)
@@ -243,11 +249,17 @@ class AffineTransform(nn.Module):
         if "img_idx" in image_infos and not self.in_test_set:
             embedding = self.embedding(image_infos["img_idx"])
         else:
-            # use mean appearance embedding
+            # use mean appearance embedding for this camera
+            if "unique_cam_idx" in image_infos and "num_cams" in image_infos:
+                    unique_cam_idx = image_infos["unique_cam_idx"]
+                    num_cams = image_infos["num_cams"]
+                    mean_embedding = self.appearance_embedding.weight[unique_cam_idx::num_cams].mean(dim=0)
+            else:
+                mean_embedding = self.appearance_embedding.weight.mean(dim=0)
             embedding = torch.ones(
                 (*image_infos["viewdirs"].shape[:-1], self.embedding_dim),
                 device=image_infos["viewdirs"].device,
-            ) * self.embedding.weight.mean(dim=0)
+            ) * mean_embedding
         if self.pixel_affine:
             embedding = torch.cat([embedding, image_infos["pixel_coords"]], dim=-1)
         affine = self.decoder(embedding)

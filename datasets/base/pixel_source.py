@@ -834,7 +834,10 @@ class ScenePixelSource(abc.ABC):
         unique_cam_idx, frame_idx = self.parse_img_idx(img_idx)
         for cam_id in self.camera_list:
             if unique_cam_idx == self.camera_data[cam_id].unique_cam_idx:
-                return self.camera_data[cam_id].get_image(frame_idx)
+                image_infos, cam_infos = self.camera_data[cam_id].get_image(frame_idx)
+                image_infos["unique_cam_idx"] = torch.tensor(unique_cam_idx, device=self.device, dtype=torch.long)
+                image_infos["num_cams"] = torch.tensor(self.num_cams, device=self.device, dtype=torch.long)
+                return image_infos, cam_infos
 
     @property
     def camera_list(self) -> List[int]:
