@@ -79,7 +79,7 @@ class DrivingDataset(SceneDataset):
         assert self.pixel_source is not None and self.lidar_source is not None, \
             "Must have both pixel source and lidar source"
         self.project_lidar_pts_on_images(
-            delete_out_of_view_points=True
+            delete_out_of_view_points=data_cfg.get("delete_out_of_view_points", True)
         )
         self.aabb = self.get_aabb()
 
