@@ -1,4 +1,6 @@
+import time
 from typing import Literal, Dict, List, Optional, Callable
+from omegaconf import OmegaConf
 from tqdm import tqdm, trange
 import numpy as np
 import os
@@ -11,7 +13,9 @@ from torch.nn import functional as F
 from skimage.metrics import structural_similarity as ssim
 
 from datasets.base import SplitWrapper
+from datasets.base.pixel_source import get_rays
 from models.trainers.base import BasicTrainer
+from utils.geometry import chamfer_distance
 from utils.visualization import (
     to8b,
     depth_visualizer,
@@ -42,6 +46,192 @@ def compute_psnr(prediction: Tensor, target: Tensor) -> float:
         target = Tensor(target).to(prediction.device)
     return (-10 * torch.log10(F.mse_loss(prediction, target))).item()
 
+def test_lidar(
+        trainer: BasicTrainer,
+        dataset: dict,
+        cfg: OmegaConf,
+        current_time
+):
+    trainer.set_eval()
+    chamfer_dists = []
+    rmses = []
+    fpss = []
+    mean_rel_l2s = []
+    median_l2s = []
+    with torch.no_grad():
+        for i in tqdm(range(len(dataset["point_clouds_in_world"])), desc="rendering lidar", dynamic_ncols=True):
+            start_time = time.time()
+            cam2world = dataset["cam2worlds"][i].to(trainer.device)
+            # depth_map = dataset["depth_maps"][i].to(trainer.device)
+            point_cloud_in_world = dataset["point_clouds_in_world"][i].to(trainer.device)
+            camidxs_per_point = dataset["camidxs_per_point"][i].to(trainer.device)
+            point_img_locs = dataset["point_img_locs"][i].to(trainer.device)
+            normalized_time = dataset["lidar_normed_times"][i].flatten()[0].to(trainer.device)
+            intrinsics = dataset["intrinsics"].to(trainer.device)
+            image_size = dataset["image_size"].to(trainer.device)
+            pred_depth_imgs = []
+            img_height, img_width = image_size
+            for j in range(len(cam2world)):
+                c2w = cam2world[j]
+                intrinsic = intrinsics[j]
+                x, y = torch.meshgrid(
+                    torch.arange(img_width),
+                    torch.arange(img_height),
+                    indexing="xy",
+                )
+                x, y = x.flatten(), y.flatten()
+                x, y = x.to(trainer.device), y.to(trainer.device)
+
+                c2w_4x4 = torch.eye(4, device=trainer.device)
+                c2w_4x4[:3, :4] = c2w[:3, :4]
+
+                origins, viewdirs, direction_norm = get_rays(x, y, c2w_4x4[None], intrinsic[None])
+                origins = origins.reshape(img_height, img_width, 3)
+                viewdirs = viewdirs.reshape(img_height, img_width, 3)
+                direction_norm = direction_norm.reshape(img_height, img_width, 1)
+
+                pixel_coords = (
+                    torch.stack([y / img_height, x / img_width], dim=-1)
+                    .float()
+                    .reshape(img_height, img_width, 2)
+                )
+
+                if normalized_time is not None:
+                    normed_time = torch.full(
+                        (img_height, img_width),
+                        normalized_time.item(),
+                        dtype=torch.float32,
+                        device=trainer.device,
+                    )
+                image_id = torch.full(
+                    (img_height, img_width),
+                    len(dataset["point_clouds_in_world"])*len(cam2world)-1,
+                    dtype=torch.long,
+                )
+
+                image_infos = {
+                    "origins": origins.to(trainer.device),
+                    "viewdirs": viewdirs.to(trainer.device),
+                    "direction_norm": direction_norm.to(trainer.device),
+                    "pixel_coords": pixel_coords.to(trainer.device),
+                    "normed_time": normed_time.to(trainer.device),
+                    "img_idx": image_id.to(trainer.device),
+                    "frame_idx": None,
+                    "pixels": torch.zeros((img_height, img_width, 3), device=trainer.device),
+                    "sky_masks": torch.zeros((img_height, img_width), dtype=torch.bool, device=trainer.device),
+                    "dynamic_masks": None,
+                    "human_masks": None,
+                    "vehicle_masks": None,
+                    "egocar_masks": None,
+                    "lidar_depth_map": None,
+                    "bottom_crop": 0,
+                }
+                cam_infos = {
+                    "cam_id": "this cannot matter",
+                    "cam_name": f"fake_cam_{j}",
+                    "camera_to_world": c2w_4x4,
+                    "height": torch.tensor(img_height, dtype=torch.long, device=trainer.device),
+                    "width": torch.tensor(img_width, dtype=torch.long, device=trainer.device),
+                    "intrinsics": intrinsic,
+                }
+
+                results = trainer(image_infos, cam_infos)
+                pred_depth_img = (results["depth"]).reshape(img_height, img_width)
+                pred_depth_imgs.append(pred_depth_img)
+
+            pred_depth_imgs = torch.stack(pred_depth_imgs) # (num_cam, H, W)
+            # grid sample wants input of shape (B, C, D, H, W) = (1, 1(depth), num_cam, H, W) 
+            # and grid of (N, Dout, Hout, Wout, 3) = (1, 1, 1, N_points, 3)
+
+            
+            # swap point_img_locs to be height first
+            sample_idxs = point_img_locs[..., :2]
+            sample_idxs[...,0] = sample_idxs[...,0] / (img_width)
+            sample_idxs[...,1] = sample_idxs[...,1] / (img_height)
+            sample_idxs = (sample_idxs - 0.5) * 2
+            assert sample_idxs.min() >= -1 and sample_idxs.max() <= 1
+            pred_z_depths = torch.zeros(len(camidxs_per_point), device=trainer.device)
+            tot_mask = torch.zeros(len(camidxs_per_point), device=trainer.device)
+            for j in range(len(cam2world)):
+                curr_mask = camidxs_per_point == j # (N_points)
+                curr_sample_idxs = sample_idxs[curr_mask] # (N_points, 2)
+                curr_pred_depth_img = pred_depth_imgs[j] # (H, W)
+                curr_pred_z_depths = torch.nn.functional.grid_sample(curr_pred_depth_img.unsqueeze(0).unsqueeze(0), curr_sample_idxs.unsqueeze(0).unsqueeze(0), mode='bilinear', padding_mode='border', align_corners=False)
+                pred_z_depths[curr_mask] = curr_pred_z_depths.flatten()
+                tot_mask[curr_mask] = 1
+            assert (tot_mask == 1).all()
+
+            # non-interpolating version could be done with:
+            # pred_z_depths = pred_depth_imgs[camidxs_per_point, point_img_locs[...,1].floor().long(), point_img_locs[...,0].floor().long()].flatten()
+            
+            # convert z-depth to 3D points and range
+            lidar_origins = cam2world[camidxs_per_point,:3,3] # (N_points, 3)
+            lidar_dir = point_cloud_in_world - lidar_origins # (N_points, 3)
+            cam_dir = cam2world[camidxs_per_point,:3,2] # (N_points, 3)
+
+            gt_ranges = torch.norm(lidar_dir, dim=-1, keepdim=True)
+            lidar_dir = lidar_dir / gt_ranges
+            cam_dir = cam_dir / torch.norm(cam_dir, dim=-1, keepdim=True)
+            # cos of the angle between the lidar beam and the camera z-axis
+            cos_theta = torch.einsum("ni,ni->n", lidar_dir, cam_dir) #torch.sum(lidar_dir * cam_dir, dim=-1) # (N_points)
+            # print(f"min cos_theta: {cos_theta.min()}, max cos_theta: {cos_theta.max()}")
+            # range = z-depth / cos(theta)
+            pred_ranges = (pred_z_depths / cos_theta).clamp_max(200)
+            pred_lidar_points = lidar_origins + lidar_dir * pred_ranges.unsqueeze(-1)
+
+            assert ((point_cloud_in_world - (lidar_origins + lidar_dir * gt_ranges)).norm(dim=-1) < 0.1).all()
+
+            end_time = time.time()
+            fps = 1 / (end_time - start_time)
+
+            chamfer_dists.append(chamfer_distance(pred_lidar_points, point_cloud_in_world, 1000, True).item())
+            rmses.append(torch.sqrt(F.mse_loss(pred_ranges.flatten(), gt_ranges.flatten())))
+            fpss.append(fps)
+            mean_rel_l2s.append(torch.mean(((pred_ranges.flatten() - gt_ranges.flatten()) / gt_ranges.flatten()) ** 2))
+            median_l2s.append(torch.median((pred_ranges.flatten() - gt_ranges.flatten()) ** 2))
+
+            # save depth maps to cfg.log_dir/depth_maps/current_time.jpg
+            # if cfg.log_dir is not None:
+            #     os.makedirs(os.path.join(cfg.log_dir, "depth_maps"), exist_ok=True)
+            #     for j in range(len(cam2world)):
+            #         d_m = pred_depth_imgs[j].cpu().numpy()
+            #         d_m = depth_visualizer(d_m, d_m > 0)
+            #         if isinstance(d_m, Tensor):
+            #             d_m = d_m.cpu().numpy()
+            #         d_m = (d_m * 255).astype(np.uint8)
+            #         imageio.imwrite(os.path.join(cfg.log_dir, "depth_maps", f"{i}_{j}.jpg"), d_m)
+            #     os.makedirs(os.path.join(cfg.log_dir, "lidar_points"), exist_ok=True)
+            #     np.save(os.path.join(cfg.log_dir, "lidar_points", f"{i}_pred.npy"), pred_lidar_points.cpu().numpy())
+            #     np.save(os.path.join(cfg.log_dir, "lidar_points", f"{i}_gt.npy"), point_cloud_in_world.cpu().numpy())
+            #     np.save(os.path.join(cfg.log_dir, "lidar_points", f"{i}_camidxs_per_point.npy"), camidxs_per_point.cpu().numpy())
+            #     np.save(os.path.join(cfg.log_dir, "lidar_points", f"{i}_point_img_locs.npy"), point_img_locs.cpu().numpy())
+
+
+    rmses = non_zero_mean(rmses)
+    chamfer_dists = non_zero_mean(chamfer_dists)
+    fps = non_zero_mean(torch.tensor(fpss))
+    mean_rel_l2 = non_zero_mean(mean_rel_l2s)
+    median_l2 = non_zero_mean(median_l2s)
+
+    results = {
+        "rmse": rmses,
+        "chamfer_dist": chamfer_dists,
+        "fps": fps,
+        "mean_rel_l2": mean_rel_l2,
+        "median_l2": median_l2,
+    }
+
+    logger.info(f"\t Full Lidar RMSE: {results['rmse']:.4f}")
+    logger.info(f"\t Full Lidar Chamfer Distance: {results['chamfer_dist']:.4f}")
+    logger.info(f"\t Full Lidar FPS: {results['fps']:.4f}")
+    logger.info(f"\t Full Lidar Mean Relative L2: {results['mean_rel_l2']:.4f}")
+    logger.info(f"\t Full Lidar Median L2: {results['median_l2']:.4f}")
+    print(f"\t Full Lidar RMSE: {results['rmse']:.4f}")
+    print(f"\t Full Lidar Chamfer Distance: {results['chamfer_dist']:.4f}")
+    print(f"\t Full Lidar FPS: {results['fps']:.4f}")
+    print(f"\t Full Lidar Mean Relative L2: {results['mean_rel_l2']:.4f}")
+    print(f"\t Full Lidar Median L2: {results['median_l2']:.4f}")
+    return results
 
 def render_images(
     trainer: BasicTrainer,

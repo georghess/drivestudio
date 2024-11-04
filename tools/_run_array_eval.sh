@@ -37,6 +37,9 @@ singularity exec --nv \
     --env PYTHONPATH=$PYTHONPATH:/drivestudio:/usr/local/lib/python3.10/dist-packages \
     ${SINGULARITY_CMD:?"must specify singularity command, at least the container (.sif) path"} \
     python -u tools/eval.py \
-    --resume_from $output_dir/drivestudio/$name-$seq/checkpoint_final.pth  \
+    --resume_from $output_dir/drivestudio/$name-$seq/checkpoint_final.pth \
     --use_bottom_crop \
+    --enable_wandb \
+    data.lidar_source.only_use_360_lidar=True \
+    data.eval_lidar=True \
     $DATAPARSER_ARGS

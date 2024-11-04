@@ -3,7 +3,7 @@ import logging
 import os
 import cv2
 import numpy as np
-from tqdm import trange, tqdm
+from tqdm import tqdm
 from omegaconf import OmegaConf
 
 import torch
@@ -78,6 +78,10 @@ class DrivingDataset(SceneDataset):
         self.pixel_source, self.lidar_source = self.build_data_source()
         assert self.pixel_source is not None and self.lidar_source is not None, \
             "Must have both pixel source and lidar source"
+        self.lidar_eval_data = None
+        if data_cfg.get("eval_lidar", False):
+            self.build_data_source_for_lidar_eval()
+
         self.project_lidar_pts_on_images(
             delete_out_of_view_points=data_cfg.get("delete_out_of_view_points", True)
         )
@@ -170,6 +174,119 @@ class DrivingDataset(SceneDataset):
                 "The timestamps of the pixel source and the lidar source are not synchronized"
         return pixel_source, lidar_source
     
+    def build_data_source_for_lidar_eval(self):
+        logger.info("Building data source for lidar evaluation")
+        num_cams = 6
+        focal_length = 930
+        fov_vertical = torch.tensor(60 / 180 * torch.pi)
+        fov_horizontal = radians_to_rotate_cam = torch.tensor(360 / num_cams * torch.pi / 180)
+        image_height = 2 * focal_length * np.tan(fov_vertical / 2)
+        image_width = 2 * focal_length * np.tan(fov_horizontal / 2)
+        cx = image_width.ceil() / 2
+        cy = image_height.ceil() / 2
+        intrinsics = torch.tensor(
+            [[focal_length, 0, cx],
+                [0, focal_length, cy],
+                [0, 0, 1]],
+            dtype=torch.float32
+        )[None].repeat(num_cams, 1, 1) # [num_cams, 3, 3]
+        image_size = torch.tensor([image_height, image_width]).ceil().int()
+
+        # print(f"Using intrinsics: {intrinsics}")
+        # print(f"Using image size: {image_size}")
+
+        cam2world = torch.tensor([[1, 0, 0],
+                                    [0, 0, 1],
+                                    [0, -1, 0]], dtype=torch.float32)
+        radians_to_rotate_cam = radians_to_rotate_cam * torch.arange(num_cams) # [num_cams]
+        # rotate the camera around the y-axis
+        cam_rot2cam = torch.cat([torch.stack([torch.cos(radians_to_rotate_cam), torch.zeros_like(radians_to_rotate_cam), torch.sin(radians_to_rotate_cam)]).permute(1, 0)[..., None, :],
+                                    torch.stack([torch.zeros_like(radians_to_rotate_cam), torch.ones_like(radians_to_rotate_cam), torch.zeros_like(radians_to_rotate_cam)]).permute(1, 0)[..., None, :],
+                                    torch.stack([-torch.sin(radians_to_rotate_cam), torch.zeros_like(radians_to_rotate_cam), torch.cos(radians_to_rotate_cam)]).permute(1, 0)[..., None, :]], dim=1)
+
+        cam2worlds = cam2world[None].repeat(num_cams, 1, 1)
+        cam2worlds = torch.matmul(
+            cam2worlds,
+            cam_rot2cam
+        ) # [num_cams, 3, 3]
+
+        cam2worlds_accum = []
+        depth_maps_accum = []
+        point_clouds_in_world = []
+        lidar_normed_times = []
+        camidxs_per_point = []
+        point_img_locs = []
+        for i, idx in enumerate(torch.unique(self.lidar_source.timesteps)):
+            # get lidar data for idx
+            lidar_rays = self.lidar_source.get_lidar_rays(idx)
+            # get points in world coordinate system
+            lidar_points_world = (
+                    lidar_rays["lidar_origins"]
+                    + lidar_rays["lidar_viewdirs"] * lidar_rays["lidar_ranges"]
+                ) # [N, 3]
+            # print(f"mean lidar points: {lidar_points_world.mean(dim=0)}")
+            # set origin of camera to the mean of lidar origins
+            origin = lidar_rays["lidar_origins"].mean(dim=0).view(1, 3, 1).repeat(num_cams, 1, 1) # [num_cams, 3, 1]
+            mean_cam_pos = torch.stack([cam_data.cam_to_worlds[i] for _, cam_data in self.pixel_source.camera_data.items()])[:, :3, 3].mean(dim=0).to(origin.device).view(1, 3, 1).repeat(num_cams, 1, 1)
+            # print(f"origin: {origin}")
+            # print(f"mean_cam_pos: {mean_cam_pos}")
+            mean_cam_pos[...,0:2, 0] = origin[...,0:2, 0]
+            cam2worlds.to(origin.device)
+            cam2worlds_curr = torch.cat([cam2worlds, mean_cam_pos], dim=-1) # [num_cams, 3, 4]
+            cam2worlds_accum.append(cam2worlds_curr)
+
+            far_enough_away = (lidar_points_world - cam2worlds_curr[0:1, :3, 3]).norm(dim=-1) > 2.0
+            lidar_points_world = lidar_points_world[far_enough_away]
+
+            lidar_normed_times.append(lidar_rays["lidar_normed_time"][far_enough_away])
+            point_clouds_in_world.append(lidar_points_world)
+            # project lidar points to image
+            world2cam = torch.cat([cam2worlds_curr[...,:3,:3].transpose(-1,-2), -torch.matmul(cam2worlds_curr[...,:3,:3].transpose(-1,-2), cam2worlds_curr[...,:3,-1].unsqueeze(-1))], dim=-1)
+            intrinsics = intrinsics.to(world2cam.device)
+            world2img = torch.matmul(intrinsics, world2cam) # [num_cams, 3, 4]
+            lidar_points_img = torch.einsum("nij,mj->nmi", world2img, torch.cat([lidar_points_world, torch.ones_like(lidar_points_world[..., 0:1])], dim=-1)) # [num_cams, N, 3]
+            depths = lidar_points_img[..., 2]
+            lidar_points_img = lidar_points_img / lidar_points_img[..., 2:3].clamp_min(1e-6)
+            lidar_point_visible = (
+                (lidar_points_img[..., 0] >= 0)
+                & (lidar_points_img[..., 0] < image_size[1])
+                & (lidar_points_img[..., 1] >= 0)
+                & (lidar_points_img[..., 1] < image_size[0])
+                & (lidar_points_img[..., 2] > 0)
+            ) # [num_cams, N]
+            if not lidar_point_visible.any(dim=0).all():
+                print(f"Some lidar points are not visible in any camera for index {idx}")
+                print(f"Num visible points: {lidar_point_visible.any(dim=0).sum()}/{len(lidar_point_visible.any(dim=0))}")
+                # 10 first non-visible points
+                non_visible_points = lidar_points_world[~lidar_point_visible.any(dim=0)]
+                num_to_print = min(10, len(non_visible_points))
+                print(f"First {num_to_print} non-visible points: {non_visible_points[:num_to_print]}")
+            assert lidar_point_visible.any(dim=0).all(), "Some lidar points are not visible in any camera"
+            # for each point, get which camera it is visible in
+            camidx_per_point = lidar_point_visible.float().argmax(dim=0) # [N]
+            depth_map = torch.zeros(num_cams, image_size[0], image_size[1]) # [num_cams, H, W]
+            depth_map[
+                camidx_per_point, 
+                lidar_points_img[camidx_per_point, torch.arange(len(lidar_points_world)), 1].long(), 
+                lidar_points_img[camidx_per_point, torch.arange(len(lidar_points_world)), 0].long()
+                ] = depths[camidx_per_point, torch.arange(len(lidar_points_world))]
+            depth_maps_accum.append(depth_map)
+            camidxs_per_point.append(camidx_per_point)
+            point_img_loc = lidar_points_img[camidx_per_point, torch.arange(len(lidar_points_world)), :2]
+            point_img_locs.append(point_img_loc)
+
+        self.lidar_eval_data = {
+            "cam2worlds": cam2worlds_accum,
+            "depth_maps": depth_maps_accum,
+            "point_clouds_in_world": point_clouds_in_world,
+            "lidar_normed_times": lidar_normed_times,
+            "camidxs_per_point": camidxs_per_point,
+            "point_img_locs": point_img_locs,
+            "intrinsics": intrinsics,
+            "image_size": image_size,
+        }
+
+
     def get_lidar_samples(
         self, 
         num_samples: float = None,

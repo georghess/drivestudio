@@ -14,7 +14,8 @@ from models.trainers import BasicTrainer
 from models.video_utils import (
     render_images,
     save_videos,
-    render_novel_views
+    render_novel_views,
+    test_lidar
 )
 
 logger = logging.getLogger()
@@ -34,6 +35,25 @@ def do_evaluation(
     only_metrics: bool = False
 ):
     trainer.set_eval()
+
+    if dataset.lidar_eval_data is not None:
+        logger.info("Evaluating Lidar...")
+        lidar_results = test_lidar(trainer, dataset.lidar_eval_data, cfg, current_time)
+        logger.info("Done evaluating Lidar.")
+        if log_metrics:
+            eval_dict = {}
+            for k, v in lidar_results.items():
+                eval_dict[f"lidar_metrics/{k}"] = float(v)
+
+            if args.enable_wandb:
+                wandb.log(eval_dict)
+
+            lidar_metrics_file = f"{cfg.log_dir}/metrics{post_fix}/lidar_{current_time}.json"
+            with open(lidar_metrics_file, "w") as f:
+                json.dump(eval_dict, f)
+
+            logger.info(f"Lidar evaluation metrics saved to {lidar_metrics_file}")
+        
 
     logger.info("Evaluating Pixels...")
     if dataset.test_image_set is not None and cfg.render.render_test:
@@ -180,10 +200,29 @@ def main(args):
     log_dir = os.path.dirname(args.resume_from)
     cfg = OmegaConf.load(os.path.join(log_dir, "config.yaml"))
     cfg = OmegaConf.merge(cfg, OmegaConf.from_cli(args.opts))
-    args.enable_wandb = False
+    # args.enable_wandb = False
     for folder in ["videos_eval", "metrics_eval"]:
         os.makedirs(os.path.join(log_dir, folder), exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if args.enable_wandb:
+        # sometimes wandb fails to init in cloud machines, so we give it several (many) tries
+        os.makedirs(os.path.join(log_dir, "wandb"), exist_ok=True)
+        while (
+            wandb.init(
+            project=os.environ.get("WANDB_PROJECT", args.project),
+            dir=os.environ.get("WANDB_DIR", str(log_dir)),
+            name=os.environ.get("WANDB_NAME", args.run_name),
+            group=os.environ.get("WANDB_RUN_GROUP", None),
+            reinit=True,
+        )
+            is not wandb.run
+        ):
+            continue
+        wandb.run.name = args.run_name
+        wandb.run.save()
+        wandb.config.update(OmegaConf.to_container(cfg, resolve=True),  allow_val_change=True)
+        wandb.config.update(args,  allow_val_change=True)
 
     # build dataset
     dataset = DrivingDataset(data_cfg=cfg.data)
@@ -267,6 +306,8 @@ if __name__ == "__main__":
 
     # bottom crop
     parser.add_argument("--use_bottom_crop", action="store_true", help="use bottom crop for evaluation")
+
+    parser.add_argument("--enable_wandb", action="store_true", help="enable wandb logging")
         
     # misc
     parser.add_argument("opts", help="Modify config options using the command-line", default=None, nargs=argparse.REMAINDER)

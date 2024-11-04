@@ -1,4 +1,5 @@
 # Utility functions for geometric transformations and projections.
+from typing import Optional
 import numpy as np
 import torch
 from torch import Tensor
@@ -102,3 +103,59 @@ def rotation_6d_to_matrix(d6: Tensor) -> Tensor:
     b2 = F.normalize(b2, dim=-1)
     b3 = torch.cross(b1, b2, dim=-1)
     return torch.stack((b1, b2, b3), dim=-2)
+
+
+def chamfer_distance(
+    source_pc: torch.Tensor,
+    target_pc: torch.Tensor,
+    chunk_size: Optional[int] = None,
+    normalize_with_target: bool = False,
+) -> torch.Tensor:
+    """Computes chamfer distance (minimum squared distance from every point to the other point cloud) between two point clouds.
+
+    Args:
+        source_pc: Source point cloud [N,3].
+        target_pc: Target point cloud [M,3].
+        chunk_size: Chunk size to use for computing chamfer distance. If None, use full point clouds.
+        normalize_with_target: Whether to normalize chamfer distance with target point cloud size.
+
+    Returns:
+        torch.Tensor: Chamfer distance between source and target.
+    """
+
+    min_dist_source_to_target = torch.tensor(0.0).to(source_pc.device)
+    min_dist_target_to_source = torch.tensor(0.0).to(source_pc.device)
+
+    # Add batch dimension as expected by torch.cdist
+    source_pc = source_pc.view(1, -1, 3)
+    target_pc = target_pc.view(1, -1, 3)
+
+    def _chamfer_dist(source, target):
+        dist = torch.cdist(source, target, p=2, compute_mode="use_mm_for_euclid_dist_if_necessary").pow(2)
+        dist = dist.view(source.shape[1], target.shape[1])
+        min_dist_source_to_target, _ = torch.min(dist, dim=1)
+        min_dist_target_to_source, _ = torch.min(dist, dim=0)
+        return min_dist_source_to_target.sum(), min_dist_target_to_source.sum()
+
+    if chunk_size is None:
+        min_dist_source_to_target, min_dist_target_to_source = _chamfer_dist(source_pc, target_pc)
+    else:
+        for i in range(0, source_pc.shape[1], chunk_size):
+            max_idx = min(i + chunk_size, source_pc.shape[1])
+            min_dist_source_to_target_add, _ = _chamfer_dist(source_pc[:, i:max_idx], target_pc)
+            min_dist_source_to_target_add = (
+                min_dist_source_to_target_add / target_pc.shape[1]
+                if normalize_with_target
+                else min_dist_source_to_target_add
+            )
+            min_dist_source_to_target += min_dist_source_to_target_add
+        for i in range(0, target_pc.shape[1], chunk_size):
+            max_idx = min(i + chunk_size, target_pc.shape[1])
+            min_dist_target_to_source_add, _ = _chamfer_dist(target_pc[:, i:max_idx], source_pc)
+            min_dist_target_to_source_add = (
+                min_dist_target_to_source_add / target_pc.shape[1]
+                if normalize_with_target
+                else min_dist_target_to_source_add
+            )
+            min_dist_target_to_source += min_dist_target_to_source_add
+    return min_dist_source_to_target + min_dist_target_to_source
