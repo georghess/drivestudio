@@ -106,6 +106,7 @@ def setup(args):
     return cfg
 
 def main(args):
+    setup_start_time = time.time()
     cfg = setup(args)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -185,10 +186,13 @@ def main(args):
     #     render_keys=render_keys,
     #     args=args,
     # )
-
+    setup_time = time.time() - setup_start_time
+    accumulated_train_seconds = setup_time
     for step in metric_logger.log_every(all_iters, cfg.logging.print_freq):
+        step_start_time = time.time()
         #----------------------------------------------------------------------------
         #----------------------------     Validate     ------------------------------
+        validate_start_time = time.time()
         if step % cfg.logging.vis_freq == 0 and cfg.logging.vis_freq > 0:
             logger.info("Visualizing...")
             vis_timestep = np.linspace(
@@ -216,7 +220,8 @@ def main(args):
                         "image_metrics/ssim": render_results["ssim"],
                         "image_metrics/occupied_psnr": render_results["occupied_psnr"],
                         "image_metrics/occupied_ssim": render_results["occupied_ssim"],
-                    }
+                    },
+                    step=step,
                 )
             vis_frame_dict = save_videos(
                 render_results,
@@ -232,12 +237,16 @@ def main(args):
                 verbose=False,
             )
             if args.enable_wandb:
+                wandb_dict = {}
                 for k, v in vis_frame_dict.items():
-                    wandb.log({"image_rendering/" + k: wandb.Image(v)})
+                    if k in ["gt_rgbs", "rgbs", "depths"]:
+                        wandb_dict.update({"image_rendering/" + k: wandb.Image(v)})
+                wandb.log(wandb_dict, step=step)
+                del wandb_dict
             del render_results
             torch.cuda.empty_cache()
                 
-        
+        time_for_validate = time.time() - validate_start_time
         #----------------------------------------------------------------------------
         #----------------------------  training step  -------------------------------
         # prepare for training
@@ -287,8 +296,15 @@ def main(args):
         metric_logger.update(**{"train_stats/gaussian_num_" + k: v for k, v in trainer.get_gaussian_count().items()})
         metric_logger.update(**{"losses/"+k: v.item() for k, v in loss_dict.items()})
         metric_logger.update(**{"train_stats/lr_" + group['name']: group['lr'] for group in trainer.optimizer.param_groups})
+        step_train_time = time.time() - step_start_time - time_for_validate
+        accumulated_train_seconds += step_train_time
         if args.enable_wandb:
-            wandb.log({k: v.avg for k, v in metric_logger.meters.items()})
+            wandb_dict = {k: v.avg for k, v in metric_logger.meters.items()}
+            wandb_dict.update({"train_metrics/accumulated_train_seconds": accumulated_train_seconds})
+            wandb_dict.update({"train_metrics/setup_time": setup_time})
+            wandb_dict.update({"train_metrics/step_train_time": step_train_time})
+            wandb_dict.update({"train_metrics/train_rays_per_sec": cam_infos["height"].cpu().item() * cam_infos["width"].cpu().item() / step_train_time})
+            wandb.log(wandb_dict, step=step)
 
         #----------------------------------------------------------------------------
         #----------------------------     Saving     --------------------------------

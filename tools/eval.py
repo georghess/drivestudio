@@ -36,6 +36,7 @@ def do_evaluation(
 ):
     trainer.set_eval()
 
+    lidar_results = None
     if dataset.lidar_eval_data is not None:
         logger.info("Evaluating Lidar...")
         lidar_results = test_lidar(trainer, dataset.lidar_eval_data, cfg, current_time)
@@ -43,10 +44,12 @@ def do_evaluation(
         if log_metrics:
             eval_dict = {}
             for k, v in lidar_results.items():
+                if k == "pred_point_clouds_in_world":
+                    continue
                 eval_dict[f"lidar_metrics/{k}"] = float(v)
 
             if args.enable_wandb:
-                wandb.log(eval_dict)
+                wandb.log(eval_dict, step=step)
 
             lidar_metrics_file = f"{cfg.log_dir}/metrics{post_fix}/lidar_{current_time}.json"
             with open(lidar_metrics_file, "w") as f:
@@ -64,7 +67,8 @@ def do_evaluation(
             compute_metrics=True,
             compute_error_map=cfg.render.vis_error,
             use_bottom_crop=use_bottom_crop,
-            only_metrics=only_metrics
+            only_metrics=only_metrics,
+            lidar_results=lidar_results
         )
         
         if log_metrics:
@@ -82,10 +86,12 @@ def do_evaluation(
                     "human_ssim",
                     "vehicle_psnr",
                     "vehicle_ssim",
+                    "fps",
+                    "rays_per_second",
                 ]:
                     eval_dict[f"image_metrics/test/{k}"] = v
             if args.enable_wandb:
-                wandb.log(eval_dict)
+                wandb.log(eval_dict, step=step)
             test_metrics_file = f"{cfg.log_dir}/metrics{post_fix}/images_test_{current_time}.json"
             with open(test_metrics_file, "w") as f:
                 json.dump(eval_dict, f)
@@ -141,10 +147,12 @@ def do_evaluation(
                     "human_ssim",
                     "vehicle_psnr",
                     "vehicle_ssim",
+                    "fps",
+                    "rays_per_second",
                 ]:
                     eval_dict[f"image_metrics/full/{k}"] = v
             if args.enable_wandb:
-                wandb.log(eval_dict)
+                wandb.log(eval_dict, step=step)
             full_metrics_file = f"{cfg.log_dir}/metrics{post_fix}/images_full_{current_time}.json"
             with open(full_metrics_file, "w") as f:
                 json.dump(eval_dict, f)
