@@ -79,10 +79,14 @@ class VanillaGaussians(nn.Module):
     def create_from_pcd(self, init_means: torch.Tensor, init_colors: torch.Tensor) -> None:
         self._means = Parameter(init_means)
         
-        distances, _ = k_nearest_sklearn(self._means.data, 3)
-        distances = torch.from_numpy(distances)
-        # find the average of the three nearest neighbors for each point and use that as the scale
-        avg_dist = distances.mean(dim=-1, keepdim=True).to(self.device)
+        if self._means.shape[0] > 3:
+            distances, _ = k_nearest_sklearn(self._means.data, 3)
+            distances = torch.from_numpy(distances)
+            # find the average of the three nearest neighbors for each point and use that as the scale
+            avg_dist = distances.mean(dim=-1, keepdim=True).to(self.device)
+        else:
+            avg_dist = torch.ones_like(self._means[:, 0:1])
+        
         if self.ball_gaussians:
             self._scales = Parameter(torch.log(avg_dist.repeat(1, 1)))
         else:
@@ -220,14 +224,14 @@ class VanillaGaussians(nn.Module):
                 assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
                 
                 avg_grad_norm = self.xys_grad_norm / self.vis_counts
-                high_grads = (avg_grad_norm > self.ctrl_cfg.densify_grad_thresh).squeeze()
+                high_grads = (avg_grad_norm > self.ctrl_cfg.densify_grad_thresh).flatten()
                 
                 splits = (
                     self.get_scaling.max(dim=-1).values > \
                         self.ctrl_cfg.densify_size_thresh * self.scene_scale
-                ).squeeze()
+                ).flatten()
                 if self.step < self.ctrl_cfg.stop_screen_size_at:
-                    splits |= (self.max_2Dsize > self.ctrl_cfg.split_screen_size).squeeze()
+                    splits |= (self.max_2Dsize > self.ctrl_cfg.split_screen_size).flatten()
                 splits &= high_grads
                 nsamps = self.ctrl_cfg.n_split_samples
                 (
@@ -242,7 +246,7 @@ class VanillaGaussians(nn.Module):
                 dups = (
                     self.get_scaling.max(dim=-1).values <= \
                         self.ctrl_cfg.densify_size_thresh * self.scene_scale
-                ).squeeze()
+                ).flatten()
                 dups &= high_grads
                 (
                     dup_means,
@@ -307,18 +311,18 @@ class VanillaGaussians(nn.Module):
         """
         n_bef = self.num_points
         # cull transparent ones
-        culls = (self.get_opacity.data < self.ctrl_cfg.cull_alpha_thresh).squeeze()
+        culls = (self.get_opacity.data < self.ctrl_cfg.cull_alpha_thresh).flatten()
         if self.step > self.ctrl_cfg.reset_alpha_interval:
             # cull huge ones
             toobigs = (
                 torch.exp(self._scales).max(dim=-1).values > 
                 self.ctrl_cfg.cull_scale_thresh * self.scene_scale
-            ).squeeze()
+            ).flatten()
             culls = culls | toobigs
             if self.step < self.ctrl_cfg.stop_screen_size_at:
                 # cull big screen space
                 assert self.max_2Dsize is not None
-                culls = culls | (self.max_2Dsize > self.ctrl_cfg.cull_screen_size).squeeze()
+                culls = culls | (self.max_2Dsize > self.ctrl_cfg.cull_screen_size).flatten()
         self._means = Parameter(self._means[~culls].detach())
         self._scales = Parameter(self._scales[~culls].detach())
         self._quats = Parameter(self._quats[~culls].detach())
@@ -344,7 +348,7 @@ class VanillaGaussians(nn.Module):
         )  # how these scales are rotated
         quats = self.quat_act(self._quats[split_mask])  # normalize them first
         rots = quat_to_rotmat(quats.repeat(samps, 1))  # how these scales are rotated
-        rotated_samples = torch.bmm(rots, scaled_samples[..., None]).squeeze()
+        rotated_samples = torch.bmm(rots, scaled_samples[..., None]).squeeze(-1)
         new_means = rotated_samples + self._means[split_mask].repeat(samps, 1)
         # step 2, sample new colors
         # new_colors_all = self.colors_all[split_mask].repeat(samps, 1, 1)
@@ -467,7 +471,7 @@ class VanillaGaussians(nn.Module):
         direct_color = self.colors
         
         activated_opacities = self.get_opacity
-        mask = activated_opacities.squeeze() > alpha_thresh
+        mask = activated_opacities.flatten() > alpha_thresh
         return {
             "positions": means[mask],
             "colors": direct_color[mask],

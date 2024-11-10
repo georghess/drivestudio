@@ -75,9 +75,13 @@ class RigidNodes(VanillaGaussians):
         
         # initialize the means, scales, quats, and colors
         self._means = Parameter(init_means)
-        distances, _ = k_nearest_sklearn(self._means.data, 3)
-        distances = torch.from_numpy(distances)
-        avg_dist = distances.mean(dim=-1, keepdim=True).to(self.device)
+        if self._means.shape[0] > 3:
+            distances, _ = k_nearest_sklearn(self._means.data, 3)
+            distances = torch.from_numpy(distances)
+            # find the average of the three nearest neighbors for each point and use that as the scale
+            avg_dist = distances.mean(dim=-1, keepdim=True).to(self.device)
+        else:
+            avg_dist = torch.ones_like(self._means[:, 0:1])
         avg_dist = avg_dist.clamp(0.002, 100)
         self._scales = Parameter(torch.log(avg_dist.repeat(1, 3)))
         self._quats = Parameter(random_quat_tensor(self.num_points).to(self.device))
@@ -138,14 +142,14 @@ class RigidNodes(VanillaGaussians):
                 assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
                 
                 avg_grad_norm = self.xys_grad_norm / self.vis_counts
-                high_grads = (avg_grad_norm > self.ctrl_cfg.densify_grad_thresh).squeeze()
+                high_grads = (avg_grad_norm > self.ctrl_cfg.densify_grad_thresh).flatten()
                 
                 splits = (
                     self.get_scaling.max(dim=-1).values > \
                         self.ctrl_cfg.densify_size_thresh * self.scene_scale
-                ).squeeze()
+                ).flatten()
                 if self.step < self.ctrl_cfg.stop_screen_size_at:
-                    splits |= (self.max_2Dsize > self.ctrl_cfg.split_screen_size).squeeze()
+                    splits |= (self.max_2Dsize > self.ctrl_cfg.split_screen_size).flatten()
                 splits &= high_grads
                 nsamps = self.ctrl_cfg.n_split_samples
                 (
@@ -161,7 +165,7 @@ class RigidNodes(VanillaGaussians):
                 dups = (
                     self.get_scaling.max(dim=-1).values <= \
                         self.ctrl_cfg.densify_size_thresh * self.scene_scale
-                ).squeeze()
+                ).flatten()
                 dups &= high_grads
                 (
                     dup_means,
@@ -228,7 +232,7 @@ class RigidNodes(VanillaGaussians):
         """
         n_bef = self.num_points
         # cull transparent ones
-        culls = (self.get_opacity.data < self.ctrl_cfg.cull_alpha_thresh).squeeze()
+        culls = (self.get_opacity.data < self.ctrl_cfg.cull_alpha_thresh).flatten()
         if self.ctrl_cfg.cull_out_of_bound:
             culls = culls | self.get_out_of_bound_mask()
         if self.step > self.ctrl_cfg.reset_alpha_interval:
@@ -236,12 +240,12 @@ class RigidNodes(VanillaGaussians):
             toobigs = (
                 torch.exp(self._scales).max(dim=-1).values > 
                 self.ctrl_cfg.cull_scale_thresh * self.scene_scale
-            ).squeeze()
+            ).flatten()
             culls = culls | toobigs
             if self.step < self.ctrl_cfg.stop_screen_size_at:
                 # cull big screen space
                 assert self.max_2Dsize is not None
-                culls = culls | (self.max_2Dsize > self.ctrl_cfg.cull_screen_size).squeeze()
+                culls = culls | (self.max_2Dsize > self.ctrl_cfg.cull_screen_size).flatten()
         self._means = Parameter(self._means[~culls].detach())
         self._scales = Parameter(self._scales[~culls].detach())
         self._quats = Parameter(self._quats[~culls].detach())
@@ -267,7 +271,7 @@ class RigidNodes(VanillaGaussians):
         )  # how these scales are rotated
         quats = self.quat_act(self._quats[split_mask])  # normalize them first
         rots = quat_to_rotmat(quats.repeat(samps, 1))  # how these scales are rotated
-        rotated_samples = torch.bmm(rots, scaled_samples[..., None]).squeeze()
+        rotated_samples = torch.bmm(rots, scaled_samples[..., None]).squeeze(-1)
         new_means = rotated_samples + self._means[split_mask].repeat(samps, 1)
         # step 2, sample new colors
         # new_colors_all = self.colors_all[split_mask].repeat(samps, 1, 1)
@@ -564,7 +568,7 @@ class RigidNodes(VanillaGaussians):
         direct_color = self.colors[pts_mask]
         
         activated_opacities = self.get_opacity[pts_mask]
-        mask = activated_opacities.squeeze() > alpha_thresh
+        mask = activated_opacities.flatten() > alpha_thresh
         return {
             "positions": means[mask],
             "colors": direct_color[mask],

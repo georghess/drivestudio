@@ -110,7 +110,7 @@ class PeriodicVibrationGaussians(VanillaGaussians):
             full_mask[self.filter_mask] = visible_mask
             
             grads = xys_grad.norm(dim=-1)
-            t_grads = self._taus.grad.clone().abs()[self.filter_mask].squeeze()
+            t_grads = self._taus.grad.clone().abs()[self.filter_mask].flatten()
             if self.xys_grad_norm is None:
                 self.xys_grad_norm = torch.zeros(self.num_points, device=grads.device, dtype=grads.dtype)
                 self.xys_grad_norm[self.filter_mask] = grads
@@ -163,7 +163,7 @@ class PeriodicVibrationGaussians(VanillaGaussians):
                 assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
                 
                 avg_grad_norm = self.xys_grad_norm / self.vis_counts
-                high_xyz_grads = (avg_grad_norm > self.ctrl_cfg.densify_grad_thresh).squeeze()
+                high_xyz_grads = (avg_grad_norm > self.ctrl_cfg.densify_grad_thresh).flatten()
                 
                 t_avg_grad = self.t_grad_accum / self.vis_counts
                 high_t_grads = t_avg_grad > self.ctrl_cfg.densify_t_grad_thresh
@@ -172,12 +172,12 @@ class PeriodicVibrationGaussians(VanillaGaussians):
                 splits_xyz = (
                     self.get_scaling.max(dim=-1).values > \
                         self.ctrl_cfg.densify_size_thresh * self.scene_scale * self.gamma
-                ).squeeze()
+                ).flatten()
                 splits_t = (torch.max(self.get_scaling_t, dim=1).values > self.ctrl_cfg.densify_t_size_thresh) & high_t_grads
                 splits = splits_xyz | splits_t
                 
                 if self.step < self.ctrl_cfg.stop_screen_size_at:
-                    splits |= (self.max_2Dsize > self.ctrl_cfg.split_screen_size).squeeze()
+                    splits |= (self.max_2Dsize > self.ctrl_cfg.split_screen_size).flatten()
                 splits &= high_grads
                 nsamps = self.ctrl_cfg.n_split_samples
                 (
@@ -195,7 +195,7 @@ class PeriodicVibrationGaussians(VanillaGaussians):
                 dups_xyz = (
                     self.get_scaling.max(dim=-1).values <= \
                         self.ctrl_cfg.densify_size_thresh * self.scene_scale * self.gamma
-                ).squeeze()
+                ).flatten()
                 dups_t = (torch.max(self.get_scaling_t, dim=1).values <= self.ctrl_cfg.densify_t_size_thresh) & high_t_grads
                 
                 dups = dups_xyz | dups_t
@@ -270,18 +270,18 @@ class PeriodicVibrationGaussians(VanillaGaussians):
         """
         n_bef = self.num_points
         # cull transparent ones
-        culls = (self.get_opacity.data < self.ctrl_cfg.cull_alpha_thresh).squeeze()
+        culls = (self.get_opacity.data < self.ctrl_cfg.cull_alpha_thresh).flatten()
         if self.step > self.ctrl_cfg.reset_alpha_interval:
             # cull huge ones
             toobigs = (
                 torch.exp(self._scales).max(dim=-1).values > 
                 self.ctrl_cfg.cull_scale_thresh * self.scene_scale * self.gamma
-            ).squeeze()
+            ).flatten()
             culls = culls | toobigs
             if self.step < self.ctrl_cfg.stop_screen_size_at:
                 # cull big screen space
                 assert self.max_2Dsize is not None
-                culls = culls | (self.max_2Dsize > self.ctrl_cfg.cull_screen_size).squeeze()
+                culls = culls | (self.max_2Dsize > self.ctrl_cfg.cull_screen_size).flatten()
         self._means = Parameter(self._means[~culls].detach())
         self._scales = Parameter(self._scales[~culls].detach())
         self._quats = Parameter(self._quats[~culls].detach())
@@ -309,7 +309,7 @@ class PeriodicVibrationGaussians(VanillaGaussians):
         )  # how these scales are rotated
         quats = self.quat_act(self._quats[split_mask])  # normalize them first
         rots = quat_to_rotmat(quats.repeat(samps, 1))  # how these scales are rotated
-        rotated_samples = torch.bmm(rots, scaled_samples[..., None]).squeeze()
+        rotated_samples = torch.bmm(rots, scaled_samples[..., None]).squeeze(-1)
         new_means = rotated_samples + self._means[split_mask].repeat(samps, 1)
         # step 2, sample new colors
         # new_colors_all = self.colors_all[split_mask].repeat(samps, 1, 1)
@@ -339,7 +339,7 @@ class PeriodicVibrationGaussians(VanillaGaussians):
         not_split_xyz_mask = (
             self.get_scaling.max(dim=-1).values <= \
                 self.ctrl_cfg.densify_size_thresh * self.scene_scale * self.gamma
-        ).squeeze()[split_mask]
+        ).flatten()[split_mask]
         new_scales[not_split_xyz_mask.repeat(samps)] = torch.log(
             self.get_scaling[split_mask].repeat(samps, 1)
         )[not_split_xyz_mask.repeat(samps)]
@@ -386,7 +386,7 @@ class PeriodicVibrationGaussians(VanillaGaussians):
             self.cur_time = scaled_train_t
             self.delta_t = 0.0
             
-        filter_mask = (self.get_marginal_t > 0.05).squeeze()
+        filter_mask = (self.get_marginal_t > 0.05).flatten()
         self.filter_mask = filter_mask
         
         means = self.temporal_means

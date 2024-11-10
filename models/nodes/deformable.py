@@ -132,7 +132,7 @@ class DeformableNodes(RigidNodes):
         deform the points
         """
         means = gaussian_dict["means"]
-        nonrigid_embed = self.instances_embedding[gaussian_dict["ids"].squeeze()]
+        nonrigid_embed = self.instances_embedding[gaussian_dict["ids"].flatten()]
         cur_normalized_time = torch.tensor(cur_normalized_time, dtype=torch.float32, device=self.device).unsqueeze(0).repeat(means.shape[0], 1)
         delta_xyz, delta_quat, delta_scale = self.deform_network(means, cur_normalized_time, nonrigid_embed)
         gaussian_dict["means"] = means + delta_xyz
@@ -204,7 +204,7 @@ class DeformableNodes(RigidNodes):
         direct_color = self.colors[pts_mask]
         
         activated_opacities = self.get_opacity[pts_mask]
-        mask = activated_opacities.squeeze() > alpha_thresh
+        mask = activated_opacities.flatten() > alpha_thresh
         return {
             "positions": means[mask],
             "colors": direct_color[mask],
