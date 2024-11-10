@@ -282,6 +282,9 @@ class PeriodicVibrationGaussians(VanillaGaussians):
                 # cull big screen space
                 assert self.max_2Dsize is not None
                 culls = culls | (self.max_2Dsize > self.ctrl_cfg.cull_screen_size).flatten()
+        # make sure to not cull all points
+        if culls.all():
+            culls[-1] = False
         self._means = Parameter(self._means[~culls].detach())
         self._scales = Parameter(self._scales[~culls].detach())
         self._quats = Parameter(self._quats[~culls].detach())
