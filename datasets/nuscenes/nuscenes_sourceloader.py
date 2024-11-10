@@ -394,6 +394,7 @@ class NuScenesLiDARSource(SceneLidarSource):
             accumulated_num_original_rays += original_length
 
             lidar_points = torch.from_numpy(lidar_info[:, :3]).float()
+            lidar_points = lidar_points[lidar_points.norm(dim=-1) > 2.0]
             lidar_origins = torch.zeros_like(lidar_points)
 
             lidar_origins = (
