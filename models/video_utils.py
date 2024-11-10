@@ -56,11 +56,12 @@ def test_lidar(
     chamfer_dists = []
     rmses = []
     fpss = []
+    rays_per_second = []
     mean_rel_l2s = []
     median_l2s = []
+    pred_point_clouds_in_world = []
     with torch.no_grad():
         for i in tqdm(range(len(dataset["point_clouds_in_world"])), desc="rendering lidar", dynamic_ncols=True):
-            start_time = time.time()
             cam2world = dataset["cam2worlds"][i].to(trainer.device)
             # depth_map = dataset["depth_maps"][i].to(trainer.device)
             point_cloud_in_world = dataset["point_clouds_in_world"][i].to(trainer.device)
@@ -71,6 +72,7 @@ def test_lidar(
             image_size = dataset["image_size"].to(trainer.device)
             pred_depth_imgs = []
             img_height, img_width = image_size
+            start_time = time.time()
             for j in range(len(cam2world)):
                 c2w = cam2world[j]
                 intrinsic = intrinsics[j]
@@ -179,16 +181,17 @@ def test_lidar(
             pred_ranges = (pred_z_depths / cos_theta).clamp_max(200)
             pred_lidar_points = lidar_origins + lidar_dir * pred_ranges.unsqueeze(-1)
 
-            assert ((point_cloud_in_world - (lidar_origins + lidar_dir * gt_ranges)).norm(dim=-1) < 0.1).all()
-
             end_time = time.time()
             fps = 1 / (end_time - start_time)
+            rays_per_second.append(pred_lidar_points.shape[0] * fps)
+            assert ((point_cloud_in_world - (lidar_origins + lidar_dir * gt_ranges)).norm(dim=-1) < 0.1).all()
 
             chamfer_dists.append(chamfer_distance(pred_lidar_points, point_cloud_in_world, 1000, True).item())
             rmses.append(torch.sqrt(F.mse_loss(pred_ranges.flatten(), gt_ranges.flatten())))
             fpss.append(fps)
             mean_rel_l2s.append(torch.mean(((pred_ranges.flatten() - gt_ranges.flatten()) / gt_ranges.flatten()) ** 2))
             median_l2s.append(torch.median((pred_ranges.flatten() - gt_ranges.flatten()) ** 2))
+            pred_point_clouds_in_world.append(pred_lidar_points.cpu())
 
             # save depth maps to cfg.log_dir/depth_maps/current_time.jpg
             # if cfg.log_dir is not None:
@@ -212,6 +215,7 @@ def test_lidar(
     fps = non_zero_mean(torch.tensor(fpss))
     mean_rel_l2 = non_zero_mean(mean_rel_l2s)
     median_l2 = non_zero_mean(median_l2s)
+    rays_per_second = non_zero_mean(rays_per_second)
 
     results = {
         "rmse": rmses,
@@ -219,6 +223,8 @@ def test_lidar(
         "fps": fps,
         "mean_rel_l2": mean_rel_l2,
         "median_l2": median_l2,
+        "pred_point_clouds_in_world": pred_point_clouds_in_world,
+        "rays_per_second": rays_per_second,
     }
 
     logger.info(f"\t Full Lidar RMSE: {results['rmse']:.4f}")
@@ -241,6 +247,7 @@ def render_images(
     vis_indices: Optional[List[int]] = None,
     use_bottom_crop: bool = False,
     only_metrics: bool = False,
+    lidar_results: Optional[Dict[str, List[Tensor]]] = None,
 ):
     """
     Render pixel-related outputs from a model.
@@ -259,6 +266,7 @@ def render_images(
         vis_indices=vis_indices,
         use_bottom_crop=use_bottom_crop,
         only_metrics=only_metrics,
+        lidar_results=lidar_results,
     )
     if compute_metrics:
         num_samples = len(dataset) if vis_indices is None else len(vis_indices)
@@ -275,6 +283,9 @@ def render_images(
         logger.info(f"\tVehicle-Only PSNR: {render_results['vehicle_psnr']:.4f}")
         logger.info(f"\tVehicle-Only SSIM: {render_results['vehicle_ssim']:.4f}")
 
+    logger.info(f"\tFPS: {non_zero_mean(render_results['fps']):.4f}")
+    logger.info(f"\tRays per second: {non_zero_mean(render_results['rays_per_second']):.4f}")
+
     return render_results
 
 
@@ -286,6 +297,7 @@ def render(
     vis_indices: Optional[List[int]] = None,
     use_bottom_crop: bool = False,
     only_metrics: bool = False,
+    lidar_results: Optional[Dict[str, List[Tensor]]] = None,
 ):
     """
     Renders a dataset utilizing a specified render function.
@@ -296,6 +308,9 @@ def render(
         compute_metrics: Optional; if True, the function will compute and return metrics. Default is False.
         compute_error_map: Optional; if True, the function will compute and return error maps. Default is False.
         vis_indices: Optional; if not None, the function will only render the specified indices. Default is None.
+        use_bottom_crop: Optional; if True, the function will crop the bottom of the image. Default is False.
+        only_metrics: Optional; if True, the function will only compute metrics. Default is False.
+        lidar_results: Optional; if not None, the function will render lidar results. Default is None.
     """
     # rgbs
     rgbs, gt_rgbs, rgb_sky_blend, rgb_sky = [], [], [], []
@@ -319,6 +334,8 @@ def render(
         human_psnrs, human_ssims = [], []
         vehicle_psnrs, vehicle_ssims = [], []
         occupied_psnrs, occupied_ssims = [], []
+    fpss = []
+    rays_per_second = []
 
     with torch.no_grad():
         indices = vis_indices if vis_indices is not None else range(len(dataset))
@@ -333,7 +350,13 @@ def render(
                 if isinstance(v, Tensor):
                     cam_infos[k] = v.cuda(non_blocking=True)
             # render the image
+            start_time = time.time()
             results = trainer(image_infos, cam_infos)
+            end_time = time.time()
+            render_time = end_time - start_time
+            fps = 1 / render_time
+            fpss.append(fps)
+            rays_per_second.append((fps * cam_infos["height"] * cam_infos["width"]).cpu().item())
             
             # ------------- clip rgb ------------- #
             for k, v in results.items():
@@ -538,6 +561,8 @@ def render(
     results_dict["depths"] = depths
     results_dict["cam_names"] = cam_names
     results_dict["cam_ids"] = cam_ids
+    results_dict["fps"] = fpss
+    results_dict["rays_per_second"] = rays_per_second
     if len(opacities) > 0:
         results_dict["opacities"] = opacities
     if len(gt_rgbs) > 0:
