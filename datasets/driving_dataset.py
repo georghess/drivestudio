@@ -80,7 +80,11 @@ class DrivingDataset(SceneDataset):
             "Must have both pixel source and lidar source"
         self.lidar_eval_data = None
         if data_cfg.get("eval_lidar", False):
-            self.build_data_source_for_lidar_eval()
+            try:
+                self.build_data_source_for_lidar_eval()
+            except Exception as e:
+                logger.error(f"Failed to build data source for lidar evaluation: {e}")
+                
 
         self.project_lidar_pts_on_images(
             delete_out_of_view_points=data_cfg.get("delete_out_of_view_points", True)
@@ -177,7 +181,8 @@ class DrivingDataset(SceneDataset):
     def build_data_source_for_lidar_eval(self):
         logger.info("Building data source for lidar evaluation")
         num_cams = 6
-        focal_length = 930
+        fxs = torch.tensor([cam.intrinsics[0,0,0] for cam in self.pixel_source.camera_data.values()])
+        focal_length = torch.median(fxs).cpu().item()
         fov_vertical = torch.tensor(60 / 180 * torch.pi)
         fov_horizontal = radians_to_rotate_cam = torch.tensor(360 / num_cams * torch.pi / 180)
         image_height = 2 * focal_length * np.tan(fov_vertical / 2)
