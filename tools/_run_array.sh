@@ -11,8 +11,9 @@ export WANDB_ENTITY=agp
 # Extract the sample name for the current $SLURM_ARRAY_TASK_ID
 id_to_seq=tools/arrays/${dataset}_id_to_seq${SUFFIX}.txt
 seq=$(awk -v ArrayTaskID=$SLURM_ARRAY_TASK_ID '$1==ArrayTaskID {print $2}' $id_to_seq)
-seq=$(echo "$seq" | sed 's/^0*//')  # Remove all leading zeros
 [[ -z $seq ]] && exit 1
+seq=$(echo "$seq" | sed 's/^0*//')  # Remove all leading zeros
+[[ -z $seq ]] && seq=0  # Set seq to 0 if it's empty
 
 # For each sequence, start the training
 echo "Starting training for $name with extra args ${@:2}"
