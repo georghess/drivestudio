@@ -220,6 +220,8 @@ def main(args):
     for folder in ["videos_eval", "metrics_eval"]:
         os.makedirs(os.path.join(log_dir, folder), exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    cfg.data.load_dynamic_mask = False
+    cfg.data.load_sky_mask = False
 
     if args.enable_wandb:
         # sometimes wandb fails to init in cloud machines, so we give it several (many) tries
