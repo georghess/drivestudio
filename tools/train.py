@@ -212,6 +212,7 @@ def main(args):
                         vis_timestep * dataset.pixel_source.num_cams + i
                         for i in range(dataset.pixel_source.num_cams)
                     ],
+                    cfg=cfg,
                 )
             if args.enable_wandb:
                 wandb.log(
@@ -333,6 +334,7 @@ def main(args):
                 render_results = render_images(
                     trainer=trainer,
                     dataset=dataset.full_image_set,
+                    cfg=cfg,
                 )
                 dataset.pixel_source.reset_downscale_factor()
                 dataset.pixel_source.update_image_error_maps(render_results)

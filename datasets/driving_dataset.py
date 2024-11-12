@@ -9,6 +9,8 @@ from omegaconf import OmegaConf
 import torch
 from torch import Tensor
 
+from datasets.nuscenes.nuscenes_sourceloader import NuScenesPixelSource
+from datasets.pandaset.pandaset_sourceloader import PandaPixelSource
 from models.gaussians.basics import *
 from datasets.base.scene_dataset import ModelType
 from datasets.base.scene_dataset import SceneDataset
@@ -180,13 +182,15 @@ class DrivingDataset(SceneDataset):
     
     def build_data_source_for_lidar_eval(self):
         logger.info("Building data source for lidar evaluation")
+        print("Building data source for lidar evaluation")
         num_cams = 6
         fxs = torch.tensor([cam.intrinsics[0,0,0] for cam in self.pixel_source.camera_data.values()])
         focal_length = torch.median(fxs).cpu().item()
-        fov_vertical = torch.tensor(60 / 180 * torch.pi)
+        print(f"Using focal length: {focal_length}")
+        fov_vertical = torch.tensor(90 / 180 * torch.pi)
         fov_horizontal = radians_to_rotate_cam = torch.tensor(360 / num_cams * torch.pi / 180)
-        image_height = 2 * focal_length * np.tan(fov_vertical / 2)
-        image_width = 2 * focal_length * np.tan(fov_horizontal / 2)
+        image_height = (2 * focal_length * np.tan(fov_vertical / 2) * 1.05).ceil() 
+        image_width = (2 * focal_length * np.tan(fov_horizontal / 2) * 1.05).ceil()
         cx = image_width.ceil() / 2
         cy = image_height.ceil() / 2
         intrinsics = torch.tensor(
@@ -197,12 +201,16 @@ class DrivingDataset(SceneDataset):
         )[None].repeat(num_cams, 1, 1) # [num_cams, 3, 3]
         image_size = torch.tensor([image_height, image_width]).ceil().int()
 
-        # print(f"Using intrinsics: {intrinsics}")
-        # print(f"Using image size: {image_size}")
+        print(f"Using intrinsics: {intrinsics}")
+        print(f"Using image size: {image_size}")
 
-        cam2world = torch.tensor([[1, 0, 0],
-                                    [0, 0, 1],
-                                    [0, -1, 0]], dtype=torch.float32)
+        if isinstance(self.pixel_source, NuScenesPixelSource):
+            cam2world = torch.eye(3, dtype=torch.float32)
+        else:
+            cam2world = torch.tensor([[1, 0, 0],
+                                        [0, 0, 1],
+                                        [0, -1, 0]], dtype=torch.float32)
+
         radians_to_rotate_cam = radians_to_rotate_cam * torch.arange(num_cams) # [num_cams]
         # rotate the camera around the y-axis
         cam_rot2cam = torch.cat([torch.stack([torch.cos(radians_to_rotate_cam), torch.zeros_like(radians_to_rotate_cam), torch.sin(radians_to_rotate_cam)]).permute(1, 0)[..., None, :],
@@ -224,19 +232,26 @@ class DrivingDataset(SceneDataset):
         for i, idx in enumerate(torch.unique(self.lidar_source.timesteps)):
             # get lidar data for idx
             lidar_rays = self.lidar_source.get_lidar_rays(idx)
+            l2w = self.lidar_source.lidar_to_worlds[i]
             # get points in world coordinate system
             lidar_points_world = (
                     lidar_rays["lidar_origins"]
                     + lidar_rays["lidar_viewdirs"] * lidar_rays["lidar_ranges"]
                 ) # [N, 3]
             # print(f"mean lidar points: {lidar_points_world.mean(dim=0)}")
+            # print(f"max lidar points: {lidar_points_world.max(dim=0)}")
+            # print(f"min lidar points: {lidar_points_world.min(dim=0)}")
             # set origin of camera to the mean of lidar origins
             origin = lidar_rays["lidar_origins"].mean(dim=0).view(1, 3, 1).repeat(num_cams, 1, 1) # [num_cams, 3, 1]
             mean_cam_pos = torch.stack([cam_data.cam_to_worlds[i] for _, cam_data in self.pixel_source.camera_data.items()])[:, :3, 3].mean(dim=0).to(origin.device).view(1, 3, 1).repeat(num_cams, 1, 1)
-            # print(f"origin: {origin}")
+            # print(f"origin: {l2w[..., :3, 3]}")
+            # print(f"mean_cam_pos: {mean_cam_pos[0]}")
             # print(f"mean_cam_pos: {mean_cam_pos}")
-            mean_cam_pos[...,0:2, 0] = origin[...,0:2, 0]
-            cam2worlds.to(origin.device)
+            if isinstance(self.pixel_source, PandaPixelSource):
+                mean_cam_pos[...,0:2, 0] = l2w[..., 0:2, 3]
+            else:
+                mean_cam_pos[..., :3, 0] = l2w[..., :3, 3]
+            cam2worlds.to(mean_cam_pos.device)
             cam2worlds_curr = torch.cat([cam2worlds, mean_cam_pos], dim=-1) # [num_cams, 3, 4]
             cam2worlds_accum.append(cam2worlds_curr)
 
@@ -266,8 +281,10 @@ class DrivingDataset(SceneDataset):
                 non_visible_points = lidar_points_world[~lidar_point_visible.any(dim=0)]
                 num_to_print = min(10, len(non_visible_points))
                 print(f"First {num_to_print} non-visible points: {non_visible_points[:num_to_print]}")
+            #assert (lidar_point_visible.any(dim=0).shape[0] - lidar_point_visible.any(dim=0).all()) > 10
             assert lidar_point_visible.any(dim=0).all(), "Some lidar points are not visible in any camera"
             # for each point, get which camera it is visible in
+            # lidar_points_world = lidar_points_world[lidar_point_visible.any(dim=0)] 
             camidx_per_point = lidar_point_visible.float().argmax(dim=0) # [N]
             depth_map = torch.zeros(num_cams, image_size[0], image_size[1]) # [num_cams, H, W]
             depth_map[
@@ -290,7 +307,6 @@ class DrivingDataset(SceneDataset):
             "intrinsics": intrinsics,
             "image_size": image_size,
         }
-
 
     def get_lidar_samples(
         self, 

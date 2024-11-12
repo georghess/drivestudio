@@ -18,6 +18,8 @@ seq=$(echo "$seq" | sed 's/^0*//')  # Remove all leading zeros
 echo "Starting eval for $name with extra args ${@:2}"
 echo "Sequence $seq"
 
+export WANDB_NAME=$name-$seq-"eval"
+
 output_dir=${OUTPUT_DIR:="outputs/$dataset-$method"}
 mkdir -p $output_dir
 
@@ -40,6 +42,8 @@ singularity exec --nv \
     --resume_from $output_dir/drivestudio/$name-$seq/checkpoint_final.pth \
     --use_bottom_crop \
     --enable_wandb \
+    --only_metrics \
+    lane_shift=True \
     data.lidar_source.only_use_360_lidar=True \
     data.eval_lidar=True \
     $DATAPARSER_ARGS

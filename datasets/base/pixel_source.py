@@ -141,6 +141,7 @@ class CameraData(object):
             self.load_sky_masks()
         self.lidar_depth_maps = None # will be loaded by: self.load_depth()
         self.image_error_maps = None # will be built by: self.build_image_error_buffer()
+        self.init_velocities()
         self.to(self.device)
         self.downscale_factor = 1.0
         
@@ -184,6 +185,15 @@ class CameraData(object):
         self.cam_to_worlds = cam_to_worlds # (num_frames, 4, 4)
         self.intrinsics = intrinsics # (num_frames, 3, 3)
         self.distortions = distortions # (num_frames, 5)
+
+    def init_velocities(self):
+        self.velocities = torch.zeros(self.num_frames, 3, device=self.device)
+        positions = self.cam_to_worlds[:, :3, 3]
+        position_diffs = positions[1:] - positions[:-1]
+        # add last diff to the end
+        position_diffs = torch.cat([position_diffs, position_diffs[-1:]], dim=0)
+        self.velocities = position_diffs # (num_frames, 3), there is no concept of physical time, so might as well just save pose differences
+
 
     def create_all_filelist(self):
         """
@@ -481,6 +491,7 @@ class CameraData(object):
             self.lidar_depth_maps = self.lidar_depth_maps.to(device)
         if self.image_error_maps is not None:
             self.image_error_maps = self.image_error_maps.to(device)
+        self.velocities = self.velocities.to(device)
     
     def get_image(self, frame_idx: int) -> Dict[str, Tensor]:
         """
@@ -635,6 +646,7 @@ class CameraData(object):
             dtype=torch.long,
         )
         c2w = self.cam_to_worlds[frame_idx]
+        velocity = self.velocities[frame_idx]
         intrinsics = self.intrinsics[frame_idx] * self.downscale_factor
         intrinsics[2, 2] = 1.0
         origins, viewdirs, direction_norm = get_rays(x, y, c2w, intrinsics)
@@ -664,6 +676,7 @@ class CameraData(object):
             "cam_id": camera_id,
             "cam_name": self.cam_name,
             "camera_to_world": c2w,
+            "velocity": velocity,
             "height": torch.tensor(img_height, dtype=torch.long, device=c2w.device),
             "width": torch.tensor(img_width, dtype=torch.long, device=c2w.device),
             "intrinsics": intrinsics,
@@ -1147,3 +1160,6 @@ class ScenePixelSource(abc.ABC):
             })
         
         return render_data
+    
+    def get_lane_shift_sign(self, scene_idx):
+        return -1

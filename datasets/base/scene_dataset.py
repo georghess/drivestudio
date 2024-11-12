@@ -117,3 +117,6 @@ class SceneDataset(abc.ABC):
     @property
     def device(self):
         return self.data_cfg.preload_device
+
+    def get_lane_shift_sign(self):
+        return self.pixel_source.get_lane_shift_sign(self.data_cfg.scene_idx)

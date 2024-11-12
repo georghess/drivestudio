@@ -440,6 +440,7 @@ class ArgoVerseLiDARSource(SceneLidarSource):
             accumulated_num_original_rays += original_length
 
             lidar_points = torch.from_numpy(lidar_info[:, :3]).float()
+            lidar_points = lidar_points[lidar_points.norm(dim=-1) > 2.0]
             # convert the lidar points to opencv coordinate system
             # since lidar points already include the information of origins
             # NOTE: here we use the pesudo origins, TODO: consider a more accurate way

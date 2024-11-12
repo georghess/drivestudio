@@ -52,3 +52,6 @@ class SplitWrapper(torch.utils.data.Dataset):
 
     def set_num_iters(self, num_iters) -> None:
         self._num_iters = num_iters
+
+    def get_lane_shift_sign(self, scene_idx):
+        return self.datasource.get_lane_shift_sign(scene_idx)

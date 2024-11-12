@@ -1,3 +1,4 @@
+import math
 import time
 from typing import Literal, Dict, List, Optional, Callable
 from omegaconf import OmegaConf
@@ -12,9 +13,13 @@ from torch import Tensor
 from torch.nn import functional as F
 from skimage.metrics import structural_similarity as ssim
 
+from datasets.argoverse.argoverse_sourceloader import ArgoVersePixelSource
 from datasets.base import SplitWrapper
 from datasets.base.pixel_source import get_rays
+from datasets.nuscenes.nuscenes_sourceloader import NuScenesPixelSource
 from models.trainers.base import BasicTrainer
+from gsplat.cuda_legacy._torch_impl import quat_to_rotmat
+from pytorch3d.transforms import matrix_to_quaternion
 from utils.geometry import chamfer_distance
 from utils.visualization import (
     to8b,
@@ -248,6 +253,8 @@ def render_images(
     use_bottom_crop: bool = False,
     only_metrics: bool = False,
     lidar_results: Optional[Dict[str, List[Tensor]]] = None,
+    lane_shift: bool = False,
+    cfg: OmegaConf = None,
 ):
     """
     Render pixel-related outputs from a model.
@@ -267,6 +274,8 @@ def render_images(
         use_bottom_crop=use_bottom_crop,
         only_metrics=only_metrics,
         lidar_results=lidar_results,
+        lane_shift=lane_shift,
+        cfg=cfg,
     )
     if compute_metrics:
         num_samples = len(dataset) if vis_indices is None else len(vis_indices)
@@ -298,6 +307,8 @@ def render(
     use_bottom_crop: bool = False,
     only_metrics: bool = False,
     lidar_results: Optional[Dict[str, List[Tensor]]] = None,
+    lane_shift: bool = False,
+    cfg: OmegaConf = None,
 ):
     """
     Renders a dataset utilizing a specified render function.
@@ -311,6 +322,7 @@ def render(
         use_bottom_crop: Optional; if True, the function will crop the bottom of the image. Default is False.
         only_metrics: Optional; if True, the function will only compute metrics. Default is False.
         lidar_results: Optional; if not None, the function will render lidar results. Default is None.
+        lane_shift: bool, optional; if True, the function will shift the lane. Default is False.
     """
     # rgbs
     rgbs, gt_rgbs, rgb_sky_blend, rgb_sky = [], [], [], []
@@ -371,9 +383,10 @@ def render(
 
             # ------------- rgb ------------- #
             rgb = results["rgb"]
-            rgbs.append(get_numpy(rgb))
-            if "pixels" in image_infos:
-                gt_rgbs.append(get_numpy(image_infos["pixels"]))
+            if not only_metrics:
+                rgbs.append(get_numpy(rgb))
+                if "pixels" in image_infos:
+                    gt_rgbs.append(get_numpy(image_infos["pixels"]))
                 
             green_background = torch.tensor([0.0, 177, 64]) / 255.0
             green_background = green_background.to(rgb.device)
@@ -416,7 +429,8 @@ def render(
                 rgb_sky.append(get_numpy(results["rgb_sky"]))
             # ------------- depth ------------- #
             depth = results["depth"]
-            depths.append(get_numpy(depth))
+            if not only_metrics:
+                depths.append(get_numpy(depth))
             # ------------- mask ------------- #
             if "opacity" in results and not only_metrics:
                 opacities.append(get_numpy(results["opacity"]))
@@ -544,6 +558,61 @@ def render(
                             )[1][vehicle_mask].mean()
                         )
 
+            if lane_shift:
+                bottom_crop = image_infos["bottom_crop"]
+                image_height = image_infos["pixels"].shape[0]
+                cropped_height = image_height - bottom_crop
+                # save gt rgb to disk
+                gt_rbg = get_numpy(image_infos["pixels"])[:cropped_height]
+                log_path = cfg.log_dir
+                os.makedirs(f"{log_path}/fid/gt_rgb", exist_ok=True)
+                imageio.imwrite(f"{log_path}/fid/gt_rgb/{str(i).zfill(5)}.png", to8b(gt_rbg))
+
+                # save pred rgb to disk
+                pred_rgb = get_numpy(rgb)[:cropped_height]
+                os.makedirs(f"{log_path}/fid/pred_rgb", exist_ok=True)
+                imageio.imwrite(f"{log_path}/fid/pred_rgb/{str(i).zfill(5)}.png", to8b(pred_rgb))
+
+                # prepare folders for lane shift
+                os.makedirs(f"{log_path}/fid/lane_shift_2", exist_ok=True)
+                os.makedirs(f"{log_path}/fid/lane_shift_3", exist_ok=True)
+
+                # prepare folders for vertical shift
+                os.makedirs(f"{log_path}/fid/vertical_shift_1", exist_ok=True)
+
+                # prepare folders for actor shift
+                os.makedirs(f"{log_path}/fid/actor_shift_trans_pos2", exist_ok=True)
+                os.makedirs(f"{log_path}/fid/actor_shift_trans_neg2", exist_ok=True)
+                os.makedirs(f"{log_path}/fid/actor_shift_rot_pos05", exist_ok=True)
+                os.makedirs(f"{log_path}/fid/actor_shift_rot_neg05", exist_ok=True)
+
+
+                # do lane shift
+                driving_direction = cam_infos["velocity"].flatten()
+                driving_direction = driving_direction / driving_direction.norm().clamp_min(1e-6)
+                if isinstance(dataset.datasource, NuScenesPixelSource):
+                    # in nuscenes origin is the first camera pose, hence y-axis points down
+                    up = torch.tensor([0.0, -1.0, 0.0], device=driving_direction.device)
+                    # actors are lwh
+                    actor_shift_direction = torch.tensor([0.0, 1.0, 0.0], device=driving_direction.device)
+                else:
+                    up = torch.tensor([0.0, 0.0, 1.0], device=driving_direction.device)
+                    # actors are wlh
+                    actor_shift_direction = torch.tensor([1.0, 0.0, 0.0], device=driving_direction.device)
+                if isinstance(dataset.datasource, ArgoVersePixelSource):
+                    actor_shift_direction = torch.tensor([0.0, 1.0, 0.0], device=driving_direction.device)
+                orth_right_direction = torch.cross(
+                    driving_direction, up
+                )
+                lane_shift_sign = dataset.get_lane_shift_sign(cfg.data.scene_idx)
+                shift_direction = orth_right_direction * lane_shift_sign
+                render_lane_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path)
+                shift_direction = up
+                render_vertical_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path)
+                render_actor_shifts(image_infos, cam_infos, actor_shift_direction, trainer, i, log_path)
+
+
+
     # messy aggregation...
     results_dict = {}
     results_dict["psnr"] = non_zero_mean(psnrs) if compute_metrics else -1
@@ -608,6 +677,176 @@ def render(
     if len(Dynamic_opacities) > 0:
         results_dict["Dynamic_opacities"] = Dynamic_opacities
     return results_dict
+
+def render_lane_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path):
+    for shift in [2, 3]:
+        # update cam_infos
+        shifted_cam_infos = cam_infos.copy()
+        shifted_cam_infos["camera_to_world"] = cam_infos["camera_to_world"].clone()
+        shifted_cam_infos["camera_to_world"][:3, 3] += shift_direction * shift
+
+        # update image_infos
+        shifted_image_infos = image_infos.copy()
+        img_height, img_width = image_infos["pixel_coords"].shape[:2]
+        x, y = torch.meshgrid(
+            torch.arange(img_width),
+            torch.arange(img_height),
+            indexing="xy",
+        )
+        x, y = x.flatten(), y.flatten()
+        x, y = x.to(trainer.device), y.to(trainer.device)
+        origins, viewdirs, direction_norm = get_rays(x, y, shifted_cam_infos["camera_to_world"], shifted_cam_infos["intrinsics"])
+        origins = origins.reshape(img_height, img_width, 3)
+        viewdirs = viewdirs.reshape(img_height, img_width, 3)
+        direction_norm = direction_norm.reshape(img_height, img_width, 1)
+        shifted_image_infos["origins"] = origins
+        shifted_image_infos["viewdirs"] = viewdirs
+        shifted_image_infos["direction_norm"] = direction_norm
+
+        results = trainer(shifted_image_infos, shifted_cam_infos)
+        rgb = results["rgb"].clamp(0., 1.)
+        bottom_crop = image_infos["bottom_crop"]
+        image_height = image_infos["pixels"].shape[0]
+        cropped_height = image_height - bottom_crop
+        pred_rgb = get_numpy(rgb)[:cropped_height]
+        imageio.imwrite(f"{log_path}/fid/lane_shift_{shift}/{str(i).zfill(5)}.png", to8b(pred_rgb))
+
+def render_vertical_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path):
+    for shift in [1]:
+        # update cam_infos
+        shifted_cam_infos = cam_infos.copy()
+        shifted_cam_infos["camera_to_world"] = cam_infos["camera_to_world"].clone()
+        shifted_cam_infos["camera_to_world"][:3, 3] += shift_direction * shift
+
+        # update image_infos
+        shifted_image_infos = image_infos.copy()
+        img_height, img_width = image_infos["pixel_coords"].shape[:2]
+        x, y = torch.meshgrid(
+            torch.arange(img_width),
+            torch.arange(img_height),
+            indexing="xy",
+        )
+        x, y = x.flatten(), y.flatten()
+        x, y = x.to(trainer.device), y.to(trainer.device)
+        origins, viewdirs, direction_norm = get_rays(x, y, shifted_cam_infos["camera_to_world"], shifted_cam_infos["intrinsics"])
+        origins = origins.reshape(img_height, img_width, 3)
+        viewdirs = viewdirs.reshape(img_height, img_width, 3)
+        direction_norm = direction_norm.reshape(img_height, img_width, 1)
+        shifted_image_infos["origins"] = origins
+        shifted_image_infos["viewdirs"] = viewdirs
+        shifted_image_infos["direction_norm"] = direction_norm
+
+        results = trainer(shifted_image_infos, shifted_cam_infos)
+        rgb = results["rgb"].clamp(0., 1.)
+        bottom_crop = image_infos["bottom_crop"]
+        image_height = image_infos["pixels"].shape[0]
+        cropped_height = image_height - bottom_crop
+        pred_rgb = get_numpy(rgb)[:cropped_height]
+        imageio.imwrite(f"{log_path}/fid/vertical_shift_{shift}/{str(i).zfill(5)}.png", to8b(pred_rgb))
+
+def render_actor_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path):
+    # copy the original
+    og_quats = {}
+    og_trans = {}
+    for model_type, model in trainer.models.items():
+        if model_type not in ["RigidNodes", "SMPLNodes", "DeformableNodes"]:
+            continue
+        if not hasattr(model, "instances_quats") or not hasattr(model, "instances_trans"):
+            continue
+        if model.instances_quats is None or model.instances_trans is None:
+            continue
+        og_quats[model_type] = model.instances_quats.clone()
+        og_trans[model_type] = model.instances_trans.clone()
+
+    # shift the actor translation
+    for _, trans in enumerate([2, -2]):
+        for model_type, model in trainer.models.items():
+            if model_type not in ["RigidNodes", "SMPLNodes", "DeformableNodes"]:
+                continue
+            if not hasattr(model, "instances_quats") or not hasattr(model, "instances_trans"):
+                continue
+            if model.instances_quats is None or model.instances_trans is None:
+                continue
+
+            actor_quats = model.instances_quats #[frames, actors, 4] or [frames, actors, 1, 4]
+            quats_has_extra_dim = actor_quats.dim() == 4
+            actor_quats = actor_quats.squeeze(-2) if quats_has_extra_dim else actor_quats
+            actor_quats = actor_quats / torch.norm(actor_quats, dim=-1, keepdim=True).clamp_min(1e-6)
+            actor_trans = model.instances_trans #[frames, actors, 3]
+            n_frames, n_actors, _ = actor_quats.shape
+            assert actor_trans.shape == (n_frames, n_actors, 3), f"actor_trans shape: {actor_trans.shape}"
+            actor_rotmat = quat_to_rotmat(
+                actor_quats
+            ) #[frames, actors, 3, 3]
+            actor_pose = torch.cat([actor_rotmat, actor_trans.unsqueeze(-1)], dim=-1) #[frames, actors, 3, 4]
+            actor_shift = trans * shift_direction
+            actor_shift = torch.einsum("faij,j->fai", actor_rotmat, actor_shift)
+            actor_pose[...,:3, 3] = actor_pose[...,:3, 3] + actor_shift
+            trainer.models[model_type].instances_trans = torch.nn.Parameter(actor_pose[...,:3, 3])
+
+        results = trainer(image_infos, cam_infos)
+        rgb = results["rgb"].clamp(0., 1.)
+        bottom_crop = image_infos["bottom_crop"]
+        image_height = image_infos["pixels"].shape[0]
+        cropped_height = image_height - bottom_crop
+        pred_rgb = get_numpy(rgb)[:cropped_height]
+        prefix = "pos" if trans >= 0 else "neg"
+        imageio.imwrite(f"{log_path}/fid/actor_shift_trans_{prefix}{abs(trans)}/{str(i).zfill(5)}.png", to8b(pred_rgb))
+
+        # reset
+        for model_type in og_quats.keys():
+            if model_type not in ["RigidNodes", "SMPLNodes", "DeformableNodes"]:
+                continue
+            trainer.models[model_type].instances_quats = torch.nn.Parameter(og_quats[model_type])
+            trainer.models[model_type].instances_trans = torch.nn.Parameter(og_trans[model_type])
+    
+    # rotate the actors
+    for _, rot in enumerate([0.5, -0.5]):
+        for model_type, model in trainer.models.items():
+            if model_type not in ["RigidNodes", "SMPLNodes", "DeformableNodes"]:
+                continue
+            if not hasattr(model, "instances_quats") or not hasattr(model, "instances_trans"):
+                continue
+            if model.instances_quats is None or model.instances_trans is None:
+                continue
+
+            actor_quats = model.instances_quats #[frames, actors, 4] or [frames, actors, 1, 4]
+            quats_has_extra_dim = actor_quats.dim() == 4
+            actor_quats = actor_quats.squeeze(-2) if quats_has_extra_dim else actor_quats
+            actor_quats = actor_quats / torch.norm(actor_quats, dim=-1, keepdim=True).clamp_min(1e-6)
+            actor_rotmat = quat_to_rotmat(
+                actor_quats
+            ) #[frames, actors, 3, 3]
+
+            rotation_yaw = torch.tensor(
+                    [
+                        [math.cos(rot), -math.sin(rot), 0.0],
+                        [math.sin(rot), math.cos(rot), 0.0],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    device=actor_rotmat.device,
+                )
+            actor_rotmat = torch.einsum("faij,jk->faik", actor_rotmat, rotation_yaw)
+            actor_quats = matrix_to_quaternion(actor_rotmat)
+            actor_quats = actor_quats.unsqueeze(-2) if quats_has_extra_dim else actor_quats
+            trainer.models[model_type].instances_quats = torch.nn.Parameter(actor_quats)
+        
+        results = trainer(image_infos, cam_infos)
+        rgb = results["rgb"].clamp(0., 1.)
+        bottom_crop = image_infos["bottom_crop"]
+        image_height = image_infos["pixels"].shape[0]
+        cropped_height = image_height - bottom_crop
+        pred_rgb = get_numpy(rgb)[:cropped_height]
+        prefix = "pos" if rot >= 0 else "neg"
+        imageio.imwrite(f"{log_path}/fid/actor_shift_rot_{prefix}{str(abs(rot)).replace('.','')}/{str(i).zfill(5)}.png", to8b(pred_rgb))
+
+        # reset
+        for model_type in og_quats.keys():
+            if model_type not in ["RigidNodes", "SMPLNodes", "DeformableNodes"]:
+                continue
+            trainer.models[model_type].instances_quats = torch.nn.Parameter(og_quats[model_type])
+            trainer.models[model_type].instances_trans = torch.nn.Parameter(og_trans[model_type])
+
 
 
 def save_videos(

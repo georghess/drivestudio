@@ -68,7 +68,9 @@ def do_evaluation(
             compute_error_map=cfg.render.vis_error,
             use_bottom_crop=use_bottom_crop,
             only_metrics=only_metrics,
-            lidar_results=lidar_results
+            lidar_results=lidar_results,
+            lane_shift=cfg.get("lane_shift", False),
+            cfg=cfg,
         )
         
         if log_metrics:
@@ -122,6 +124,9 @@ def do_evaluation(
         torch.cuda.empty_cache()
         
     if cfg.render.render_full:
+        lane_shift = cfg.get("lane_shift", False)
+        if dataset.test_image_set is not None and cfg.render.render_test:
+            lane_shift = False
         logger.info("Evaluating Full Set...")
         render_results = render_images(
             trainer=trainer,
@@ -129,7 +134,9 @@ def do_evaluation(
             compute_metrics=True,
             compute_error_map=cfg.render.vis_error,
             use_bottom_crop=use_bottom_crop,
-            only_metrics=only_metrics
+            only_metrics=only_metrics,
+            lane_shift=lane_shift,
+            cfg=cfg,
         )
         
         if log_metrics:
@@ -208,6 +215,7 @@ def main(args):
     log_dir = os.path.dirname(args.resume_from)
     cfg = OmegaConf.load(os.path.join(log_dir, "config.yaml"))
     cfg = OmegaConf.merge(cfg, OmegaConf.from_cli(args.opts))
+    cfg.log_dir = log_dir
     # args.enable_wandb = False
     for folder in ["videos_eval", "metrics_eval"]:
         os.makedirs(os.path.join(log_dir, folder), exist_ok=True)
@@ -218,16 +226,16 @@ def main(args):
         os.makedirs(os.path.join(log_dir, "wandb"), exist_ok=True)
         while (
             wandb.init(
-            project=os.environ.get("WANDB_PROJECT", args.project),
+            project=os.environ.get("WANDB_PROJECT", "drivestudio"),
             dir=os.environ.get("WANDB_DIR", str(log_dir)),
-            name=os.environ.get("WANDB_NAME", args.run_name),
+            name=os.environ.get("WANDB_NAME", None),
             group=os.environ.get("WANDB_RUN_GROUP", None),
             reinit=True,
+            resume="allow"
         )
             is not wandb.run
         ):
             continue
-        wandb.run.name = args.run_name
         wandb.run.save()
         wandb.config.update(OmegaConf.to_container(cfg, resolve=True),  allow_val_change=True)
         wandb.config.update(args,  allow_val_change=True)
@@ -294,7 +302,8 @@ def main(args):
         args=args,
         post_fix="_eval",
         use_bottom_crop=args.use_bottom_crop,
-        log_metrics=True
+        log_metrics=True,
+        only_metrics=args.only_metrics
     )
     
     if args.enable_viewer:
@@ -316,6 +325,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_bottom_crop", action="store_true", help="use bottom crop for evaluation")
 
     parser.add_argument("--enable_wandb", action="store_true", help="enable wandb logging")
+    parser.add_argument("--only_metrics", action="store_true", help="only calculate metrics, useful for big datasets")
         
     # misc
     parser.add_argument("opts", help="Modify config options using the command-line", default=None, nargs=argparse.REMAINDER)

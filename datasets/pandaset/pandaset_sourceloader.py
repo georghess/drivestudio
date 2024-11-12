@@ -1,7 +1,8 @@
+from collections import defaultdict
 import json
 import logging
 import os
-from typing import Dict
+from typing import Dict, Literal
 
 import joblib
 import numpy as np
@@ -59,6 +60,22 @@ OPENCV2DATASET = np.array(
 # 4: right_camera
 # 5: back_camera
 AVAILABLE_CAM_LIST = [0, 1, 2, 3, 4, 5]
+
+LANE_SHIFT_SIGN: Dict[str, Literal[-1, 1]] = defaultdict(lambda: -1)
+LANE_SHIFT_SIGN.update(
+    {
+        "001": -1,
+        "011": 1,
+        "016": 1,
+        "028": -1,
+        "053": 1,
+        "063": -1,
+        "084": -1,
+        "106": -1,
+        "123": -1,
+        "158": -1,
+    }
+)
 
 class PandaCameraData(CameraData):
     def __init__(self, **kwargs):
@@ -330,7 +347,12 @@ class PandaPixelSource(ScenePixelSource):
                         smpl_human_all[instance_id]["frame_valid"][fi - self.start_timestep] = True
 
             self.smpl_human_all = smpl_human_all
-            
+
+    def get_lane_shift_sign(self, scene_idx) -> Literal[-1, 1]:
+        """
+        Get the sign of the lane shift.
+        """
+        return LANE_SHIFT_SIGN[str(scene_idx).zfill(3)]       
 class PandaLiDARSource(SceneLidarSource):
     def __init__(
         self,
@@ -502,3 +524,9 @@ class PandaLiDARSource(SceneLidarSource):
             self.visible_masks = None
         else:
             logger.info("[Lidar] No unvisible points to clear.")
+
+    def get_lane_shift_sign(self, scene_idx) -> Literal[-1, 1]:
+        """
+        Get the sign of the lane shift.
+        """
+        return LANE_SHIFT_SIGN[str(scene_idx).zfill(3)]
