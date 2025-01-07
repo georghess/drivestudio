@@ -187,7 +187,7 @@ class DrivingDataset(SceneDataset):
         fxs = torch.tensor([cam.intrinsics[0,0,0] for cam in self.pixel_source.camera_data.values()])
         focal_length = torch.median(fxs).cpu().item()
         print(f"Using focal length: {focal_length}")
-        fov_vertical = torch.tensor(90 / 180 * torch.pi)
+        fov_vertical = torch.tensor(60 / 180 * torch.pi)
         fov_horizontal = radians_to_rotate_cam = torch.tensor(360 / num_cams * torch.pi / 180)
         image_height = (2 * focal_length * np.tan(fov_vertical / 2) * 1.05).ceil() 
         image_width = (2 * focal_length * np.tan(fov_horizontal / 2) * 1.05).ceil()
@@ -250,7 +250,7 @@ class DrivingDataset(SceneDataset):
             if isinstance(self.pixel_source, PandaPixelSource):
                 mean_cam_pos[...,0:2, 0] = l2w[..., 0:2, 3]
             else:
-                mean_cam_pos[..., :3, 0] = l2w[..., :3, 3]
+                mean_cam_pos = origin
             cam2worlds.to(mean_cam_pos.device)
             cam2worlds_curr = torch.cat([cam2worlds, mean_cam_pos], dim=-1) # [num_cams, 3, 4]
             cam2worlds_accum.append(cam2worlds_curr)
@@ -259,7 +259,6 @@ class DrivingDataset(SceneDataset):
             lidar_points_world = lidar_points_world[far_enough_away]
 
             lidar_normed_times.append(lidar_rays["lidar_normed_time"][far_enough_away])
-            point_clouds_in_world.append(lidar_points_world)
             # project lidar points to image
             world2cam = torch.cat([cam2worlds_curr[...,:3,:3].transpose(-1,-2), -torch.matmul(cam2worlds_curr[...,:3,:3].transpose(-1,-2), cam2worlds_curr[...,:3,-1].unsqueeze(-1))], dim=-1)
             intrinsics = intrinsics.to(world2cam.device)
@@ -282,9 +281,15 @@ class DrivingDataset(SceneDataset):
                 num_to_print = min(10, len(non_visible_points))
                 print(f"First {num_to_print} non-visible points: {non_visible_points[:num_to_print]}")
             #assert (lidar_point_visible.any(dim=0).shape[0] - lidar_point_visible.any(dim=0).all()) > 10
-            assert lidar_point_visible.any(dim=0).all(), "Some lidar points are not visible in any camera"
+            #assert lidar_point_visible.any(dim=0).all(), "Some lidar points are not visible in any camera"
             # for each point, get which camera it is visible in
             # lidar_points_world = lidar_points_world[lidar_point_visible.any(dim=0)] 
+            ok_points = lidar_point_visible.any(dim=0)
+            lidar_points_world = lidar_points_world[ok_points]
+            point_clouds_in_world.append(lidar_points_world)
+            lidar_points_img = lidar_points_img[:, ok_points]
+            lidar_point_visible = lidar_point_visible[:, ok_points]
+            depths = depths[:, ok_points]
             camidx_per_point = lidar_point_visible.float().argmax(dim=0) # [N]
             depth_map = torch.zeros(num_cams, image_size[0], image_size[1]) # [num_cams, H, W]
             depth_map[
