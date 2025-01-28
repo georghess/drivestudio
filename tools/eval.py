@@ -90,6 +90,9 @@ def do_evaluation(
                     "vehicle_ssim",
                     "fps",
                     "rays_per_second",
+                    "preprocess_times",
+                    "render_times",
+                    "postprocess_times",
                 ]:
                     eval_dict[f"image_metrics/test/{k}"] = v
             if args.enable_wandb:

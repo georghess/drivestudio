@@ -76,6 +76,7 @@ def test_lidar(
             intrinsics = dataset["intrinsics"].to(trainer.device)
             image_size = dataset["image_size"].to(trainer.device)
             pred_depth_imgs = []
+            render_times = []
             img_height, img_width = image_size
             start_time = time.time()
             for j in range(len(cam2world)):
@@ -142,9 +143,10 @@ def test_lidar(
                     "intrinsics": intrinsic,
                 }
 
-                results = trainer(image_infos, cam_infos)
+                results = trainer(image_infos, cam_infos, return_timings=True)
                 pred_depth_img = (results["depth"]).reshape(img_height, img_width)
                 pred_depth_imgs.append(pred_depth_img)
+                render_times.append(sum(val for val in results["timings"].values()))
 
             pred_depth_imgs = torch.stack(pred_depth_imgs) # (num_cam, H, W)
             # grid sample wants input of shape (B, C, D, H, W) = (1, 1(depth), num_cam, H, W) 
@@ -187,7 +189,7 @@ def test_lidar(
             pred_lidar_points = lidar_origins + lidar_dir * pred_ranges.unsqueeze(-1)
 
             end_time = time.time()
-            fps = 1 / (end_time - start_time)
+            fps = 1 / sum(render_times)
             rays_per_second.append(pred_lidar_points.shape[0] * fps)
             assert ((point_cloud_in_world - (lidar_origins + lidar_dir * gt_ranges)).norm(dim=-1) < 0.1).all()
 
@@ -196,7 +198,7 @@ def test_lidar(
             fpss.append(fps)
             mean_rel_l2s.append(torch.mean(((pred_ranges.flatten() - gt_ranges.flatten()) / gt_ranges.flatten()) ** 2))
             median_l2s.append(torch.median((pred_ranges.flatten() - gt_ranges.flatten()) ** 2))
-            pred_point_clouds_in_world.append(pred_lidar_points.cpu())
+            # pred_point_clouds_in_world.append(pred_lidar_points.cpu())
 
             # save depth maps to cfg.log_dir/depth_maps/current_time.jpg
             # if cfg.log_dir is not None:
@@ -292,8 +294,11 @@ def render_images(
         logger.info(f"\tVehicle-Only PSNR: {render_results['vehicle_psnr']:.4f}")
         logger.info(f"\tVehicle-Only SSIM: {render_results['vehicle_ssim']:.4f}")
 
-    logger.info(f"\tFPS: {non_zero_mean(render_results['fps']):.4f}")
-    logger.info(f"\tRays per second: {non_zero_mean(render_results['rays_per_second']):.4f}")
+    logger.info(f"\tFPS: {render_results['fps']:.4f}")
+    logger.info(f"\tRays per second: {render_results['rays_per_second']:.4f}")
+    logger.info(f"\tPreprocess time: {render_results['preprocess_times']:.4f}")
+    logger.info(f"\tRender time: {render_results['render_times']:.4f}")
+    logger.info(f"\tPostprocess time: {render_results['postprocess_times']:.4f}")
 
     return render_results
 
@@ -309,6 +314,7 @@ def render(
     lidar_results: Optional[Dict[str, List[Tensor]]] = None,
     lane_shift: bool = False,
     cfg: OmegaConf = None,
+    overwrite: bool = False,
 ):
     """
     Renders a dataset utilizing a specified render function.
@@ -348,6 +354,9 @@ def render(
         occupied_psnrs, occupied_ssims = [], []
     fpss = []
     rays_per_second = []
+    preprocess_times = []
+    render_times = []
+    postprocess_times = []
 
     with torch.no_grad():
         indices = vis_indices if vis_indices is not None else range(len(dataset))
@@ -362,13 +371,14 @@ def render(
                 if isinstance(v, Tensor):
                     cam_infos[k] = v.cuda(non_blocking=True)
             # render the image
-            start_time = time.time()
-            results = trainer(image_infos, cam_infos)
-            end_time = time.time()
-            render_time = end_time - start_time
+            results = trainer(image_infos, cam_infos, return_timings=True)
+            render_time = sum(val for val in results["timings"].values())
             fps = 1 / render_time
             fpss.append(fps)
             rays_per_second.append((fps * cam_infos["height"] * cam_infos["width"]).cpu().item())
+            preprocess_times.append(results["timings"]["pre_proc"])
+            render_times.append(results["timings"]["render"])
+            postprocess_times.append(results["timings"]["post_proc"])
             
             # ------------- clip rgb ------------- #
             for k, v in results.items():
@@ -566,12 +576,16 @@ def render(
                 gt_rbg = get_numpy(image_infos["pixels"])[:cropped_height]
                 log_path = cfg.log_dir
                 os.makedirs(f"{log_path}/fid/gt_rgb", exist_ok=True)
-                imageio.imwrite(f"{log_path}/fid/gt_rgb/{str(i).zfill(5)}.png", to8b(gt_rbg))
+                filepath = f"{log_path}/fid/gt_rgb/{str(i).zfill(5)}.png"
+                if not os.path.exists(filepath) or os.path.getsize(filepath) == 0 or overwrite:
+                    imageio.imwrite(f"{log_path}/fid/gt_rgb/{str(i).zfill(5)}.png", to8b(gt_rbg))
 
                 # save pred rgb to disk
                 pred_rgb = get_numpy(rgb)[:cropped_height]
                 os.makedirs(f"{log_path}/fid/pred_rgb", exist_ok=True)
-                imageio.imwrite(f"{log_path}/fid/pred_rgb/{str(i).zfill(5)}.png", to8b(pred_rgb))
+                filepath = f"{log_path}/fid/pred_rgb/{str(i).zfill(5)}.png"
+                if not os.path.exists(filepath) or os.path.getsize(filepath) == 0 or overwrite:
+                    imageio.imwrite(f"{log_path}/fid/pred_rgb/{str(i).zfill(5)}.png", to8b(pred_rgb))
 
                 # prepare folders for lane shift
                 os.makedirs(f"{log_path}/fid/lane_shift_2", exist_ok=True)
@@ -606,10 +620,10 @@ def render(
                 )
                 lane_shift_sign = dataset.get_lane_shift_sign(cfg.data.scene_idx)
                 shift_direction = orth_right_direction * lane_shift_sign
-                render_lane_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path)
+                render_lane_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path, overwrite)
                 shift_direction = up
-                render_vertical_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path)
-                render_actor_shifts(image_infos, cam_infos, actor_shift_direction, trainer, i, log_path)
+                render_vertical_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path, overwrite)
+                render_actor_shifts(image_infos, cam_infos, actor_shift_direction, trainer, i, log_path, overwrite)
 
 
 
@@ -630,8 +644,11 @@ def render(
     results_dict["depths"] = depths
     results_dict["cam_names"] = cam_names
     results_dict["cam_ids"] = cam_ids
-    results_dict["fps"] = fpss
-    results_dict["rays_per_second"] = rays_per_second
+    results_dict["fps"] = non_zero_mean(fpss)
+    results_dict["rays_per_second"] = non_zero_mean(rays_per_second)
+    results_dict["preprocess_times"] = non_zero_mean(preprocess_times)
+    results_dict["render_times"] = non_zero_mean(render_times)
+    results_dict["postprocess_times"] = non_zero_mean(postprocess_times)
     if len(opacities) > 0:
         results_dict["opacities"] = opacities
     if len(gt_rgbs) > 0:
@@ -678,8 +695,11 @@ def render(
         results_dict["Dynamic_opacities"] = Dynamic_opacities
     return results_dict
 
-def render_lane_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path):
+def render_lane_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path, overwrite=False):
     for shift in [2, 3]:
+        filepath = f"{log_path}/fid/lane_shift_{shift}/{str(i).zfill(5)}.png"
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 0 and not overwrite:
+            continue
         # update cam_infos
         shifted_cam_infos = cam_infos.copy()
         shifted_cam_infos["camera_to_world"] = cam_infos["camera_to_world"].clone()
@@ -709,10 +729,13 @@ def render_lane_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_
         image_height = image_infos["pixels"].shape[0]
         cropped_height = image_height - bottom_crop
         pred_rgb = get_numpy(rgb)[:cropped_height]
-        imageio.imwrite(f"{log_path}/fid/lane_shift_{shift}/{str(i).zfill(5)}.png", to8b(pred_rgb))
+        imageio.imwrite(filepath, to8b(pred_rgb))
 
-def render_vertical_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path):
+def render_vertical_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path, overwrite=False):
     for shift in [1]:
+        filepath = f"{log_path}/fid/vertical_shift_{shift}/{str(i).zfill(5)}.png"
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 0 and not overwrite:
+            continue
         # update cam_infos
         shifted_cam_infos = cam_infos.copy()
         shifted_cam_infos["camera_to_world"] = cam_infos["camera_to_world"].clone()
@@ -742,9 +765,9 @@ def render_vertical_shifts(image_infos, cam_infos, shift_direction, trainer, i, 
         image_height = image_infos["pixels"].shape[0]
         cropped_height = image_height - bottom_crop
         pred_rgb = get_numpy(rgb)[:cropped_height]
-        imageio.imwrite(f"{log_path}/fid/vertical_shift_{shift}/{str(i).zfill(5)}.png", to8b(pred_rgb))
+        imageio.imwrite(filepath, to8b(pred_rgb))
 
-def render_actor_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path):
+def render_actor_shifts(image_infos, cam_infos, shift_direction, trainer, i, log_path, overwrite=False):
     # copy the original
     og_quats = {}
     og_trans = {}
@@ -760,6 +783,10 @@ def render_actor_shifts(image_infos, cam_infos, shift_direction, trainer, i, log
 
     # shift the actor translation
     for _, trans in enumerate([2, -2]):
+        prefix = "pos" if trans >= 0 else "neg"
+        filepath = f"{log_path}/fid/actor_shift_trans_{prefix}{abs(trans)}/{str(i).zfill(5)}.png"
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 0 and not overwrite:
+            continue
         for model_type, model in trainer.models.items():
             if model_type not in ["RigidNodes", "SMPLNodes", "DeformableNodes"]:
                 continue
@@ -790,8 +817,7 @@ def render_actor_shifts(image_infos, cam_infos, shift_direction, trainer, i, log
         image_height = image_infos["pixels"].shape[0]
         cropped_height = image_height - bottom_crop
         pred_rgb = get_numpy(rgb)[:cropped_height]
-        prefix = "pos" if trans >= 0 else "neg"
-        imageio.imwrite(f"{log_path}/fid/actor_shift_trans_{prefix}{abs(trans)}/{str(i).zfill(5)}.png", to8b(pred_rgb))
+        imageio.imwrite(filepath, to8b(pred_rgb))
 
         # reset
         for model_type in og_quats.keys():
@@ -802,6 +828,10 @@ def render_actor_shifts(image_infos, cam_infos, shift_direction, trainer, i, log
     
     # rotate the actors
     for _, rot in enumerate([0.5, -0.5]):
+        prefix = "pos" if rot >= 0 else "neg"
+        filepath = f"{log_path}/fid/actor_shift_rot_{prefix}{str(abs(rot)).replace('.','')}/{str(i).zfill(5)}.png"
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 0 and not overwrite:
+            continue
         for model_type, model in trainer.models.items():
             if model_type not in ["RigidNodes", "SMPLNodes", "DeformableNodes"]:
                 continue
@@ -837,8 +867,7 @@ def render_actor_shifts(image_infos, cam_infos, shift_direction, trainer, i, log
         image_height = image_infos["pixels"].shape[0]
         cropped_height = image_height - bottom_crop
         pred_rgb = get_numpy(rgb)[:cropped_height]
-        prefix = "pos" if rot >= 0 else "neg"
-        imageio.imwrite(f"{log_path}/fid/actor_shift_rot_{prefix}{str(abs(rot)).replace('.','')}/{str(i).zfill(5)}.png", to8b(pred_rgb))
+        imageio.imwrite(filepath, to8b(pred_rgb))
 
         # reset
         for model_type in og_quats.keys():
