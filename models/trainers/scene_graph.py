@@ -1,3 +1,4 @@
+from time import perf_counter
 from typing import Dict
 import torch
 import logging
@@ -196,7 +197,8 @@ class MultiTrainer(BasicTrainer):
         self, 
         image_infos: Dict[str, torch.Tensor],
         camera_infos: Dict[str, torch.Tensor],
-        novel_view: bool = False
+        novel_view: bool = False,
+        return_timings: bool = False
     ) -> Dict[str, torch.Tensor]:
         """Forward pass of the model
 
@@ -208,7 +210,9 @@ class MultiTrainer(BasicTrainer):
         Returns:
             Dict[str, torch.Tensor]: output of the model
         """
-
+        pre_proc_start, render_start, post_proc_start, post_proc_end = None, None, None, None
+        if return_timings:
+            pre_proc_start = perf_counter()
         # set current time or use temporal smoothing
         normed_time = image_infos["normed_time"].flatten()[0]
         self.cur_frame = torch.argmin(
@@ -236,7 +240,9 @@ class MultiTrainer(BasicTrainer):
             cam=processed_cam,
             image_ids=image_infos["img_idx"].flatten()[0]
         )
-
+        if return_timings:
+            torch.cuda.synchronize()
+            render_start = perf_counter()
         # render gaussians
         outputs, render_fn = self.render_gaussians(
             gs=gs,
@@ -246,6 +252,9 @@ class MultiTrainer(BasicTrainer):
             render_mode="RGB+ED",
             radius_clip=self.render_cfg.get('radius_clip', 0.)
         )
+        if return_timings:
+            torch.cuda.synchronize()
+            post_proc_start = perf_counter()
         
         # render sky
         sky_model = self.models['Sky']
@@ -256,6 +265,14 @@ class MultiTrainer(BasicTrainer):
         outputs["rgb"] = self.affine_transformation(
             outputs["rgb_gaussians"] + outputs["rgb_sky"] * (1.0 - outputs["opacity"]), image_infos
         )
+        if return_timings:
+            torch.cuda.synchronize()
+            post_proc_end = perf_counter()
+            outputs["timings"] = {
+                "pre_proc": render_start - pre_proc_start,
+                "render": post_proc_start - render_start,
+                "post_proc": post_proc_end - post_proc_start
+            }
         
         if not self.training and self.render_each_class:
             with torch.no_grad():

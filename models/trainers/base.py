@@ -1,3 +1,4 @@
+from time import perf_counter
 from typing import Dict, List, Tuple
 from omegaconf import OmegaConf
 import os
@@ -448,7 +449,8 @@ class BasicTrainer(nn.Module):
         self, 
         image_infos: Dict[str, torch.Tensor],
         camera_infos: Dict[str, torch.Tensor],
-        novel_view: bool = False
+        novel_view: bool = False,
+        return_timings: bool = False
     ) -> Dict[str, torch.Tensor]:
         """Forward pass of the model
 
@@ -460,7 +462,9 @@ class BasicTrainer(nn.Module):
         Returns:
             Dict[str, torch.Tensor]: output of the model
         """
-
+        pre_proc_start, render_start, post_proc_start, post_proc_end = None, None, None, None
+        if return_timings:
+            pre_proc_start = perf_counter()
         # for evaluation
         for model in self.models.values():
             if hasattr(model, 'in_test_set'):
@@ -476,7 +480,9 @@ class BasicTrainer(nn.Module):
             cam=processed_cam,
             image_ids=image_infos["img_idx"].flatten()[0]
         )
-
+        if return_timings:
+            torch.cuda.synchronize()
+            render_start = perf_counter()
         # render gaussians
         outputs, _ = self.render_gaussians(
             gs=gs,
@@ -486,6 +492,9 @@ class BasicTrainer(nn.Module):
             render_mode="RGB+ED",
             radius_clip=self.render_cfg.get('radius_clip', 0.)
         )
+        if return_timings:
+            torch.cuda.synchronize()
+            post_proc_start = perf_counter()
         
         # render sky
         sky_model = self.models['Sky']
@@ -496,7 +505,14 @@ class BasicTrainer(nn.Module):
         outputs["rgb"] = self.affine_transformation(
             outputs["rgb_gaussians"] + outputs["rgb_sky"] * (1.0 - outputs["opacity"]), image_infos
         )
-        
+        if return_timings:
+            torch.cuda.synchronize()
+            post_proc_end = perf_counter()
+            outputs["timings"] = {
+                "pre_proc": render_start - pre_proc_start,
+                "render": post_proc_start - render_start,
+                "post_proc": post_proc_end - post_proc_start
+            }
         return outputs
     
     def backward(self, loss_dict: Dict[str, torch.Tensor]) -> None:
