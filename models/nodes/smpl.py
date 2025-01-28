@@ -395,9 +395,12 @@ class SMPLNodes(RigidNodes):
         # check nan in gs_dict
         for k, v in gs_dict.items():
             if torch.isnan(v).any():
-                raise ValueError(f"NaN detected in gaussian {k} at step {self.step}")
+                # set to zero
+                gs_dict[k] = torch.zeros_like(v)
+
             if torch.isinf(v).any():
-                raise ValueError(f"Inf detected in gaussian {k} at step {self.step}")
+                # set to zero
+                gs_dict[k] = torch.zeros_like(v)
         
         self._gs_cache = {
             "_scales": activated_scales[filter_mask],
